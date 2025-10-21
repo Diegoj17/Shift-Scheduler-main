@@ -69,11 +69,10 @@ WSGI_APPLICATION = 'core.wsgi.application'
 # DATABASE CONFIGURATION - USANDO TU DATABASE_URL DE RAILWAY
 DATABASES = {
     'default': dj_database_url.config(
-        # Esta es tu variable DATABASE_URL de Railway
-        default='postgresql://postgres:MNaIbwASWZPLIgjEvMBPaVOrgWgRdLDw@switchyard.proxy.rlwy.net:10210/railway',
+        default=os.getenv('DATABASE_URL'),
         conn_max_age=600,
         conn_health_checks=True,
-        ssl_require=True  # Importante para Railway
+        ssl_require=False  # Importante para Railway
     )
 }
 
