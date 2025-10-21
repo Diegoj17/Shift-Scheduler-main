@@ -1,0 +1,9 @@
+Django>=5.0
+djangorestframework
+djangorestframework-simplejwt
+django-cors-headers
+python-dotenv
+psycopg[binary]   # si usarás Postgres (opcional)
+whitenoise
+gunicorn
+dj-database-url

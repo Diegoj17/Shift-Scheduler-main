@@ -1,0 +1,35 @@
+# docker-compose.yml
+services:
+  db:
+    image: postgres:18
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-shiftscheduler}
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+  backend:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    depends_on:
+      - db
+    environment:
+      DJANGO_SECRET_KEY: ${DJANGO_SECRET_KEY:-change-me}
+      DEBUG: ${DEBUG:-False}
+      POSTGRES_DB: ${POSTGRES_DB:-shiftscheduler}
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+      POSTGRES_HOST: ${POSTGRES_HOST:-db}
+      POSTGRES_PORT: ${POSTGRES_PORT:-5432}
+      PASSWORD_RESET_CONFIRM_FRONTEND_URL: ${PASSWORD_RESET_CONFIRM_FRONTEND_URL:-}
+    ports:
+      - "8000:8000"
+    # volumes:
+    #   - ./backend:/app
+    # command: bash -lc "python manage.py runserver 0.0.0.0:8000"
+volumes:
+  pgdata:
