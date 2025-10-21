@@ -124,11 +124,13 @@ CSRF_TRUSTED_ORIGINS = [
     "http://localhost:4000",
     "http://localhost:5173",
     "https://*.railway.app",
+    "https://shiftscheduler1.vercel.app"
 ]
 
 CORS_ALLOWED_ORIGINS = [
     "http://localhost:4000",
     "http://localhost:5173",
+    "https://shiftscheduler1.vercel.app"
 ]
 
 CORS_ALLOW_CREDENTIALS = True
