@@ -2,6 +2,8 @@
 import dj_database_url
 import os
 from dotenv import load_dotenv
+import dj_database_url
+from datetime import timedelta
 
 load_dotenv()
 
@@ -132,6 +134,13 @@ PASSWORD_RESET_CONFIRM_FRONTEND_URL = os.getenv(
     "PASSWORD_RESET_CONFIRM_FRONTEND_URL", ""
 )
 
+# CSRF settings - IMPORTANTE para Railway
+CSRF_TRUSTED_ORIGINS = [
+    "http://localhost:4000",
+    "http://localhost:5173",
+    "https://*.railway.app",  # ✅ Permite todos los subdominios de Railway
+]
+
 # CORS settings - ACTUALIZADO para producción
 CORS_ALLOWED_ORIGINS = [
     "http://localhost:4000",
@@ -147,7 +156,7 @@ CORS_ALLOW_CREDENTIALS = True
 if DEBUG:
     CORS_ALLOW_ALL_ORIGINS = True
 else:
-    CORS_ALLOW_ALL_ORIGINS = False
+    CORS_ALLOW_ALL_ORIGINS = True
 
 # Security settings for production
 if not DEBUG:
