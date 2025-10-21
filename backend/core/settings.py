@@ -64,17 +64,16 @@ TEMPLATES = [
 
 WSGI_APPLICATION = 'core.wsgi.application'
 
-# DATABASE CONFIGURATION
-DATABASES = {
-    'default': dj_database_url.config(
-        default=os.getenv('DATABASE_URL'),
-        conn_max_age=600,
-        conn_health_checks=True,
-    )
-}
+# DATABASE CONFIGURATION - Compatible con psycopg3
+DATABASE_URL = os.getenv('DATABASE_URL')
 
-# Fallback para desarrollo local
-if not DATABASES['default']:
+if DATABASE_URL:
+    # Producción - Railway
+    DATABASES = {
+        'default': dj_database_url.parse(DATABASE_URL)
+    }
+else:
+    # Desarrollo local
     DATABASES = {
         'default': {
             'ENGINE': 'django.db.backends.sqlite3',
