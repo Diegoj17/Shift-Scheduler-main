@@ -7,14 +7,13 @@ from django.contrib.auth.hashers import make_password
 from django.contrib.auth import authenticate
 from django.contrib.auth.tokens import PasswordResetTokenGenerator
 
-from .models import User
+from .models import User, ALLOWED_PERMS
 from .validators import validate_password_strength
 
 User = get_user_model()
 token_generator = PasswordResetTokenGenerator()
 
 ALLOWED_ROLES = {"ADMIN", "GERENTE", "EMPLEADO"}
-ALLOWED_PERMS = {"ver", "crear", "editar", "eliminar", "aprobar"}
 
 
 class RegisterSerializer(serializers.ModelSerializer):

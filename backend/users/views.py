@@ -12,6 +12,7 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 from rest_framework_simplejwt.tokens import RefreshToken
 from .serializers import LoginSerializer, RegisterSerializer, UserPublicSerializer, AdminCreateUserSerializer,AdminUpdateUserSerializer, AssignRolePermsSerializer
+from . import serializers as user_serializers
 
 class RegisterView(APIView):
     authentication_classes = []
@@ -165,7 +166,13 @@ class AdminListNonGerenteUsersView(generics.ListAPIView):
         # autorización por rol
         if self.request.user.role not in ["ADMIN", "GERENTE"]:
             return User.objects.none()
-        return User.objects.exclude(role="GERENTE").order_by("id")
+        # Excluir al propio usuario que hace la petición
+        qs = User.objects.exclude(role="GERENTE")
+        try:
+            qs = qs.exclude(pk=self.request.user.pk)
+        except Exception:
+            pass
+        return qs.order_by("id")
 
 class AdminUpdateUserView(generics.UpdateAPIView):
     """
@@ -188,6 +195,11 @@ class AdminUpdateUserView(generics.UpdateAPIView):
 
         # ✅ No permitir que un usuario se edite a sí mismo (opcional)
         instance = self.get_object()
+        if getattr(instance, 'role', None) == "GERENTE":
+            return Response({"detail": "Usuario no encontrado."}, status=404)
+        # No permitir operar sobre usuarios GERENTE a través de este endpoint
+        if getattr(instance, 'role', None) == "GERENTE":
+            return Response({"detail": "Usuario no encontrado."}, status=404)
         if instance.id == request.user.id:
             return Response(
                 {"detail": "No puedes editar tu propio usuario desde aquí."}, 
@@ -294,6 +306,8 @@ class AdminUserDetailView(generics.RetrieveUpdateDestroyAPIView):
             return Response({"detail": "No tienes permiso para eliminar usuarios."}, status=403)
 
         instance = self.get_object()
+        if getattr(instance, 'role', None) == "GERENTE":
+            return Response({"detail": "Usuario no encontrado."}, status=404)
         if instance.pk == request.user.pk:
             return Response({"detail": "No puedes eliminar tu propio usuario."}, status=400)
 
@@ -315,6 +329,8 @@ class AdminBlockUserView(APIView):
 
         try:
             user = User.objects.get(pk=pk)
+            if getattr(user, 'role', None) == "GERENTE":
+                return Response({"detail": "Usuario no encontrado."}, status=404)
         except User.DoesNotExist:
             return Response({"detail": "Usuario no encontrado."}, status=404)
 
@@ -357,7 +373,7 @@ class AdminUserAccessView(APIView):
         if request.user.role not in ["ADMIN", "GERENTE"]:
             return Response({"detail": "No tienes permiso para ver acceso."}, status=403)
         user = self.get_object(pk)
-        if not user:
+        if not user or getattr(user, 'role', None) == "GERENTE":
             return Response({"detail": "Usuario no encontrado."}, status=404)
         return Response({
             "id": user.id,
@@ -370,7 +386,7 @@ class AdminUserAccessView(APIView):
         if request.user.role not in ["ADMIN", "GERENTE"]:
             return Response({"detail": "No tienes permiso para asignar roles/permisos."}, status=403)
         user = self.get_object(pk)
-        if not user:
+        if not user or getattr(user, 'role', None) == "GERENTE":
             return Response({"detail": "Usuario no encontrado."}, status=404)
 
         ser = AssignRolePermsSerializer(data=request.data)
