@@ -44,7 +44,6 @@ class User(AbstractUser):
     first_name = models.CharField(max_length=100)
     last_name = models.CharField(max_length=100)
     telefono = models.CharField(max_length=15, blank=True, null=True)
-    telefono = models.CharField(max_length=15, blank=True, null=True)
     role = models.CharField(max_length=10, choices=Role.choices, default=Role.EMPLEADO)
     status = models.CharField(max_length=10, choices=Status.choices, default=Status.ACTIVE)
 
