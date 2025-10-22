@@ -2,7 +2,7 @@ import time
 from .models import User
 from django.conf import settings
 from django.core.cache import cache
-from django.core.mail import send_mail
+from django.core.mail import send_mail, EmailMultiAlternatives
 from django.utils.http import urlsafe_base64_encode
 from django.utils.encoding import smart_bytes
 from django.contrib.auth import get_user_model
@@ -67,9 +67,11 @@ class PasswordResetRequestView(APIView):
     authentication_classes = []
     permission_classes = []
 
-    RATE_LIMIT_SECONDS = 3600  # 1 por hora
+    RATE_LIMIT_SECONDS = 3600  # 1 solicitud por hora
 
     def post(self, request):
+        import threading  # para envío asíncrono
+
         ser = PasswordResetRequestSerializer(data=request.data)
         if not ser.is_valid():
             return Response(ser.errors, status=status.HTTP_400_BAD_REQUEST)
@@ -78,15 +80,16 @@ class PasswordResetRequestView(APIView):
         # rate limit por email
         key = f"pwdreset:{user.email.lower()}"
         if cache.get(key):
-            # 429 Too Many Requests
-            return Response({"message": "Ya se solicitó un restablecimiento recientemente. Intenta más tarde."},
-                            status=429)
+            return Response(
+                {"message": "Ya se solicitó un restablecimiento recientemente. Intenta más tarde."},
+                status=429
+            )
         cache.set(key, True, self.RATE_LIMIT_SECONDS)
 
         uidb64 = urlsafe_base64_encode(smart_bytes(user.pk))
         token = token_generator.make_token(user)
 
-        # arma enlace para el front si existe, si no, backend
+        # Armar enlace para el frontend o backend
         front_url = getattr(settings, "PASSWORD_RESET_CONFIRM_FRONTEND_URL", "")
         if front_url:
             link = f"{front_url}?uid={uidb64}&token={token}"
@@ -95,17 +98,37 @@ class PasswordResetRequestView(APIView):
 
         subject = "Restablecer contraseña – Shift Scheduler"
         message = (
-            f"Hola {user.first_name},\n\n"
+            f"Hola {user.first_name or user.email},\n\n"
             f"Solicitaste restablecer tu contraseña. Haz clic en el enlace (expira en 24 horas):\n\n{link}\n\n"
             "Si no fuiste tú, ignora este mensaje."
         )
-        send_mail(subject, message, settings.DEFAULT_FROM_EMAIL, [user.email], fail_silently=False)
 
-        # En desarrollo puedes (opcional) devolver los datos para facilitar test QA:
+        # --- ✅ Envío de correo ASÍNCRONO (para evitar 502/timeout) ---
+        def _send_email_async():
+            try:
+                send_mail(
+                    subject,
+                    message,
+                    settings.DEFAULT_FROM_EMAIL,
+                    [user.email],
+                    fail_silently=True,  # no detiene la API si el SMTP falla
+                )
+            except Exception as e:
+                print(f"[WARN] Error enviando email reset: {e}")
+
+        threading.Thread(target=_send_email_async, daemon=True).start()
+        # ---------------------------------------------------------------
+
+        # En desarrollo puedes devolver uid/token para probar
         if settings.DEBUG:
-            return Response({"message": "Correo de restablecimiento enviado.", "uid": uidb64, "token": token},
-                            status=200)
-        return Response({"message": "Correo de restablecimiento enviado."}, status=200)
+            return Response(
+                {"message": "Correo de restablecimiento enviado.", "uid": uidb64, "token": token},
+                status=200
+            )
+        return Response(
+            {"message": "Si el correo existe, se ha enviado un enlace de recuperación."},
+            status=200
+        )
 
 
 class PasswordResetConfirmView(APIView):
