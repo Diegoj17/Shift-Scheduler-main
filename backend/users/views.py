@@ -169,8 +169,8 @@ class AdminListNonGerenteUsersView(generics.ListAPIView):
 
 class AdminUpdateUserView(generics.UpdateAPIView):
     """
-    PATCH /api/auth/users/<id>   -> actualización parcial
-    PUT   /api/auth/users/<id>   -> actualización total
+    PATCH /api/auth/users/<id>/update/   -> actualización parcial
+    PUT   /api/auth/users/<id>/update/   -> actualización total
     Solo roles ADMIN o GERENTE.
     """
     queryset = User.objects.all()
@@ -181,31 +181,52 @@ class AdminUpdateUserView(generics.UpdateAPIView):
     def update(self, request, *args, **kwargs):
         # ✅ Autorización por rol
         if request.user.role not in ["ADMIN", "GERENTE"]:
-            return Response({"detail": "No tienes permiso para editar usuarios."}, status=403)
+            return Response(
+                {"detail": "No tienes permiso para editar usuarios."}, 
+                status=status.HTTP_403_FORBIDDEN
+            )
+
+        # ✅ No permitir que un usuario se edite a sí mismo (opcional)
+        instance = self.get_object()
+        if instance.id == request.user.id:
+            return Response(
+                {"detail": "No puedes editar tu propio usuario desde aquí."}, 
+                status=status.HTTP_400_BAD_REQUEST
+            )
 
         partial = request.method.lower() == "patch"
-        instance = self.get_object()
+        
+        try:
+            serializer = self.get_serializer(instance, data=request.data, partial=partial)
+            serializer.is_valid(raise_exception=True)
+            self.perform_update(serializer)
 
-        serializer = self.get_serializer(instance, data=request.data, partial=partial)
-        serializer.is_valid(raise_exception=True)
-        self.perform_update(serializer)
-
-        user = serializer.instance
-        return Response(
-            {
-                "message": "Usuario actualizado con éxito.",
-                "user": {
-                    "id": user.id,
-                    "first_name": user.first_name,
-                    "last_name": user.last_name,
-                    "telefono": user.telefono,
-                    "email": user.email,
-                    "role": user.role,
-                    "status": user.status,
+            user = serializer.instance
+            return Response(
+                {
+                    "message": "Usuario actualizado con éxito.",
+                    "user": {
+                        "id": user.id,
+                        "first_name": user.first_name,
+                        "last_name": user.last_name,
+                        "telefono": user.telefono,
+                        "email": user.email,
+                        "role": user.role,
+                        "status": user.status,
+                    },
                 },
-            },
-            status=200,
-        )
+                status=status.HTTP_200_OK,
+            )
+        except serializers.ValidationError as e:
+            return Response(
+                {"detail": "Error de validación", "errors": e.detail},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        except Exception as e:
+            return Response(
+                {"detail": f"Error al actualizar usuario: {str(e)}"},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
 
 class AdminDeleteUserView(generics.DestroyAPIView):
     queryset = User.objects.all()
