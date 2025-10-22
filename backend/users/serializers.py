@@ -7,9 +7,15 @@ from django.contrib.auth.hashers import make_password
 from django.contrib.auth import authenticate
 from django.contrib.auth.tokens import PasswordResetTokenGenerator
 
-from rest_framework import serializers
 from .models import User
 from .validators import validate_password_strength
+
+User = get_user_model()
+token_generator = PasswordResetTokenGenerator()
+
+ALLOWED_ROLES = {"ADMIN", "GERENTE", "EMPLEADO"}
+ALLOWED_PERMS = {"ver", "crear", "editar", "eliminar", "aprobar"}
+
 
 class RegisterSerializer(serializers.ModelSerializer):
     password = serializers.CharField(write_only=True, required=True)
@@ -17,7 +23,7 @@ class RegisterSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = User
-        fields = ("id","first_name","last_name","telefono","email","password","password_confirm","role")
+        fields = ("id", "first_name", "last_name", "telefono", "email", "password", "password_confirm", "role")
         read_only_fields = ("id",)
 
     def validate_email(self, value):
@@ -37,10 +43,12 @@ class RegisterSerializer(serializers.ModelSerializer):
         validated_data["password"] = make_password(validated_data["password"])
         return User.objects.create(**validated_data)
 
+
 class UserPublicSerializer(serializers.ModelSerializer):
     class Meta:
         model = User
-        fields = ("id","first_name","last_name","telefono","email","role","status")
+        fields = ("id", "first_name", "last_name", "telefono", "email", "role", "status")
+
 
 class LoginSerializer(serializers.Serializer):
     email = serializers.EmailField()
@@ -52,23 +60,14 @@ class LoginSerializer(serializers.Serializer):
 
         user = authenticate(request=self.context.get("request"), email=email, password=password)
         if not user:
-            # 401 credenciales inválidas
             raise serializers.ValidationError({"detail": "Credenciales inválidas."})
 
-        # Reglas por estado del usuario
         if not user.is_active or user.status in ("BLOCKED", "INACTIVE"):
-            # 403 estado no permitido
             raise serializers.ValidationError({"detail": "Usuario no autorizado. Verifica tu estado."})
 
         attrs["user"] = user
         return attrs
 
-User = get_user_model()
-
-token_generator = PasswordResetTokenGenerator()
-
-ALLOWED_ROLES = {"ADMIN", "GERENTE", "EMPLEADO"}
-ALLOWED_PERMS = {"ver", "crear", "editar", "eliminar", "aprobar"}
 
 class AssignRolePermsSerializer(serializers.Serializer):
     role = serializers.CharField(required=True)
@@ -84,9 +83,7 @@ class AssignRolePermsSerializer(serializers.Serializer):
     def validate_permissions(self, perms):
         invalid = [p for p in perms if p not in ALLOWED_PERMS]
         if invalid:
-            # 👇 Criterio de aceptación: “Permiso no permitido”
             raise serializers.ValidationError([f"Permiso no permitido: {p}" for p in invalid])
-        # Quitar duplicados manteniendo el orden
         seen = set()
         cleaned = []
         for p in perms:
@@ -100,6 +97,7 @@ class AssignRolePermsSerializer(serializers.Serializer):
         instance.permissions = validated_data["permissions"]
         instance.save(update_fields=["role", "permissions"])
         return instance
+
 
 class PasswordResetRequestSerializer(serializers.Serializer):
     email = serializers.EmailField()
@@ -122,7 +120,6 @@ class PasswordResetConfirmSerializer(serializers.Serializer):
     def validate(self, attrs):
         if attrs["new_password"] != attrs["new_password_confirm"]:
             raise serializers.ValidationError({"new_password_confirm": "Las contraseñas no coinciden."})
-        # validación de política de contraseña
         validate_password(attrs["new_password"])
         return attrs
 
@@ -136,12 +133,12 @@ class PasswordResetConfirmSerializer(serializers.Serializer):
         return value
 
     def validate_token(self, value):
-        # el user se coloca en validate_uid
         user = self.context.get("user")
         if not user or not token_generator.check_token(user, value):
             raise serializers.ValidationError("Token inválido o expirado.")
         return value
-    
+
+
 class AdminCreateUserSerializer(serializers.ModelSerializer):
     password = serializers.CharField(write_only=True, required=True)
     password_confirm = serializers.CharField(write_only=True, required=True)
@@ -167,20 +164,31 @@ class AdminCreateUserSerializer(serializers.ModelSerializer):
         user = User.objects.create(**validated_data)
         return user
 
+
 class AdminUpdateUserSerializer(serializers.ModelSerializer):
-    telefono = serializers.CharField(required=False, allow_blank=True, max_length=15)
+    """
+    Serializer para actualización de usuarios por Admin/Gerente.
+    NO requiere contraseña para actualizar.
+    """
+    telefono = serializers.CharField(required=False, allow_blank=True, allow_null=True, max_length=15)
     email = serializers.EmailField(required=False)
 
     class Meta:
         model = User
-    fields = ("id", "first_name", "last_name", "telefono", "email", "role", "status")
+        fields = ("id", "first_name", "last_name", "telefono", "email", "role", "status")
+        read_only_fields = ("id",)
+        extra_kwargs = {
+            'first_name': {'required': False},
+            'last_name': {'required': False},
+            'role': {'required': False},
+            'status': {'required': False},
+        }
 
     def validate_email(self, value):
-        # Si no se envía email en el PATCH, no validamos
+        """Validar que el email no esté en uso por otro usuario"""
         if value in (None, ""):
             return value
 
-        # Validar duplicado case-insensitive excluyendo el propio registro
         qs = User.objects.filter(email__iexact=value)
         if self.instance:
             qs = qs.exclude(pk=self.instance.pk)
@@ -188,3 +196,35 @@ class AdminUpdateUserSerializer(serializers.ModelSerializer):
             raise serializers.ValidationError("El correo ya está registrado.")
         return value
 
+    def validate_telefono(self, value):
+        """Validar formato de teléfono"""
+        if value and value.strip():
+            clean_value = value.strip()
+            if not clean_value.isdigit():
+                raise serializers.ValidationError("El teléfono solo debe contener dígitos.")
+            if len(clean_value) != 10:
+                raise serializers.ValidationError("El teléfono debe tener exactamente 10 dígitos.")
+        return value
+
+    def validate_role(self, value):
+        """Validar que el rol sea válido"""
+        if value not in User.Role.values:
+            raise serializers.ValidationError(
+                f"Rol inválido. Debe ser uno de: {', '.join(User.Role.values)}"
+            )
+        return value
+
+    def validate_status(self, value):
+        """Validar que el status sea válido"""
+        if value not in User.Status.values:
+            raise serializers.ValidationError(
+                f"Status inválido. Debe ser uno de: {', '.join(User.Status.values)}"
+            )
+        return value
+
+    def update(self, instance, validated_data):
+        """Actualizar el usuario con los datos validados"""
+        for attr, value in validated_data.items():
+            setattr(instance, attr, value)
+        instance.save()
+        return instance
