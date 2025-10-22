@@ -114,11 +114,8 @@ SIMPLE_JWT = {
     'ROTATE_REFRESH_TOKENS': True,
 }
 
-EMAIL_BACKEND = "django.core.mail.backends.console.EmailBackend"
-DEFAULT_FROM_EMAIL = "no-reply@shift-scheduler.local"
 
-PASSWORD_RESET_TIMEOUT = 60 * 60 * 24
-PASSWORD_RESET_CONFIRM_FRONTEND_URL = os.getenv("PASSWORD_RESET_CONFIRM_FRONTEND_URL", "")
+
 
 CSRF_TRUSTED_ORIGINS = [
     "http://localhost:4000",
@@ -142,3 +139,24 @@ if not DEBUG:
     SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')
     CSRF_COOKIE_SECURE = True
     SESSION_COOKIE_SECURE = True
+
+
+DEBUG = os.getenv("DEBUG", "False") == "True"
+
+EMAIL_BACKEND = "django.core.mail.backends.smtp.EmailBackend"
+EMAIL_HOST = os.getenv("EMAIL_HOST", "smtp.sendgrid.net")
+EMAIL_PORT = int(os.getenv("EMAIL_PORT", "587"))
+EMAIL_USE_TLS = os.getenv("EMAIL_USE_TLS", "True") == "True"
+
+EMAIL_HOST_USER = os.getenv("EMAIL_HOST_USER", "apikey")
+EMAIL_HOST_PASSWORD = os.getenv("EMAIL_HOST_PASSWORD", "")
+
+DEFAULT_FROM_EMAIL = os.getenv(
+    "DEFAULT_FROM_EMAIL",
+    "Shift Scheduler <soporteshiftscheduler@gmail.com>"
+)
+
+PASSWORD_RESET_CONFIRM_FRONTEND_URL = os.getenv(
+    "PASSWORD_RESET_CONFIRM_FRONTEND_URL",
+    "https://shiftscheduler1.vercel.app/reset-password"
+)
