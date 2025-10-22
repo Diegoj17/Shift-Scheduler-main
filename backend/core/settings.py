@@ -158,5 +158,5 @@ DEFAULT_FROM_EMAIL = os.getenv(
 
 PASSWORD_RESET_CONFIRM_FRONTEND_URL = os.getenv(
     "PASSWORD_RESET_CONFIRM_FRONTEND_URL",
-    "https://shift-scheduler-main-production.up.railway.app/api/auth/password/reset"
+    "https://shift-scheduler-main-production.up.railway.app/api/auth/password/reset/"
 )
