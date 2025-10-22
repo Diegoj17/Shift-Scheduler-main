@@ -158,5 +158,5 @@ DEFAULT_FROM_EMAIL = os.getenv(
 
 PASSWORD_RESET_CONFIRM_FRONTEND_URL = os.getenv(
     "PASSWORD_RESET_CONFIRM_FRONTEND_URL",
-    "https://shiftscheduler1.vercel.app/reset-password"
+    "https://shiftscheduler1.vercel.app/api/auth/password/reset"
 )
