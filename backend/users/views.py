@@ -153,6 +153,20 @@ class AdminCreateUserView(generics.CreateAPIView):
             status=status.HTTP_201_CREATED
         )
 
+class AdminListNonGerenteUsersView(generics.ListAPIView):
+    """
+    GET /api/auth/users/ -> Lista todos los usuarios excepto los que tienen role='GERENTE'.
+    Solo accesible para usuarios autenticados con rol ADMIN o GERENTE.
+    """
+    serializer_class = UserPublicSerializer
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get_queryset(self):
+        # autorización por rol
+        if self.request.user.role not in ["ADMIN", "GERENTE"]:
+            return User.objects.none()
+        return User.objects.exclude(role="GERENTE").order_by("id")
+
 class AdminUpdateUserView(generics.UpdateAPIView):
     """
     PATCH /api/auth/users/<id>   -> actualización parcial

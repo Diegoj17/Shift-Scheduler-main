@@ -2,6 +2,7 @@ from django.contrib.auth.models import AbstractUser, BaseUserManager
 from django.db import models
 
 
+
 class UserManager(BaseUserManager):
     """Manager personalizado para usar email como identificador principal."""
 
@@ -42,6 +43,7 @@ class User(AbstractUser):
     email = models.EmailField(unique=True)
     first_name = models.CharField(max_length=100)
     last_name = models.CharField(max_length=100)
+    telefono = models.CharField(max_length=15, blank=True, null=True)
     telefono = models.CharField(max_length=15, blank=True, null=True)
     role = models.CharField(max_length=10, choices=Role.choices, default=Role.EMPLEADO)
     status = models.CharField(max_length=10, choices=Status.choices, default=Status.ACTIVE)

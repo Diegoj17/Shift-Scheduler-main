@@ -173,7 +173,7 @@ class AdminUpdateUserSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = User
-        fields = ("id", "first_name", "last_name", "telefono", "email", "role", "status")
+    fields = ("id", "first_name", "last_name", "telefono", "email", "role", "status")
 
     def validate_email(self, value):
         # Si no se envía email en el PATCH, no validamos
