@@ -14,7 +14,7 @@ from rest_framework.views import APIView
 from rest_framework_simplejwt.tokens import RefreshToken
 from .serializers import LoginSerializer, RegisterSerializer, UserPublicSerializer, AdminCreateUserSerializer,AdminUpdateUserSerializer, AssignRolePermsSerializer
 from . import serializers as user_serializers
-from services import email_service
+from services.email_service import get_email_service, generate_reset_token
 from django.views.decorators.csrf import ensure_csrf_cookie
 from django.http import JsonResponse
 
@@ -68,55 +68,38 @@ from .serializers import (
 
 token_generator = PasswordResetTokenGenerator()
 
-class PasswordResetRequestView(APIView):
-    authentication_classes = []
-    permission_classes = []
-
-    RATE_LIMIT_SECONDS = 300  # 5 minutos
-
+class PasswordResetView(APIView):
     def post(self, request):
-        ser = PasswordResetRequestSerializer(data=request.data)
-        if not ser.is_valid():
-            return Response(ser.errors, status=status.HTTP_400_BAD_REQUEST)
-
-        user = ser.context["user"]
+        email = request.data.get('email')
         
-        # Rate limit por email
-        key = f"pwdreset:{user.email.lower()}"
-        if cache.get(key):
-            return Response(
-                {"message": "Ya se solicitó un restablecimiento recientemente. Intenta más tarde."},
-                status=429
+        try:
+            user = User.objects.get(email=email)
+            
+            # Generar token
+            reset_token = generate_reset_token()
+            
+            # Enviar email usando el servicio
+            email_service = get_email_service()
+            success = email_service.send_password_reset_email(
+                to_email=user.email,
+                reset_token=reset_token,
+                user_name=user.first_name or user.email
             )
-        cache.set(key, True, self.RATE_LIMIT_SECONDS)
-
-        # Generar token
-        uidb64 = urlsafe_base64_encode(smart_bytes(user.pk))
-        token = token_generator.make_token(user)
-
-        # Envío ASÍNCRONO con nuestro nuevo servicio
-        def _send_email_async():
-            try:
-                success = email_service.send_password_reset_email(
-                    to_email=user.email,
-                    reset_token=token,  # Enviamos el token directamente
-                    user_name=user.first_name or user.email.split('@')[0]
-                )
-                if success:
-                    print(f"✅ Email de recuperación enviado a {user.email}")
-                else:
-                    print(f"❌ Error enviando email a {user.email}")
-            except Exception as e:
-                print(f"❌ Error en envío asíncrono: {e}")
-
-        # Ejecutar en segundo plano
-        threading.Thread(target=_send_email_async, daemon=True).start()
-
-        # Respuesta inmediata
-        return Response(
-            {"message": "Si el correo existe, se ha enviado un enlace de recuperación."},
-            status=200
-        )
+            
+            if success:
+                return Response({
+                    "message": "Email de recuperación enviado"
+                }, status=200)
+            else:
+                return Response({
+                    "error": "Error al enviar el email"
+                }, status=500)
+                
+        except User.DoesNotExist:
+            # Por seguridad, devolver el mismo mensaje
+            return Response({
+                "message": "Si el email existe, recibirás instrucciones"
+            }, status=200)
 
 
 class PasswordResetConfirmView(APIView):
@@ -142,6 +125,7 @@ class PasswordResetConfirmView(APIView):
         # Envío ASÍNCRONO de confirmación
         def _send_confirmation_email():
             try:
+                email_service = get_email_service()
                 success = email_service.send_password_updated_email(
                     to_email=user.email,
                     user_name=user.first_name or user.email.split('@')[0]
