@@ -7,3 +7,4 @@ psycopg[binary]
 dj-database-url==2.1.0
 gunicorn==21.2.0
 whitenoise==6.6.0
+sendgrid==6.10.0
