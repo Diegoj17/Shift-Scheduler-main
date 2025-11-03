@@ -18,6 +18,8 @@ from .serializers import ShiftTypeSerializer
 import logging
 import traceback
 from django.conf import settings
+from django.db import connection
+from django.contrib.auth import get_user_model
 
 
 class ShiftListView(ListView):
@@ -272,3 +274,48 @@ class ShiftTypeDeleteAPIView(APIView):
             {"message": "Tipo de turno eliminado exitosamente"}, 
             status=status.HTTP_204_NO_CONTENT
         )
+
+
+class ShiftListAPIView(APIView):
+    """API para devolver turnos en JSON para el calendario del frontend.
+
+    Usamos una consulta SQL cruda porque el esquema actual en la BD (migra
+    ciones históricas) difiere del modelo en `shifts.models`. Esto evita
+    errores de columna inexistente al serializar con el ORM.
+    """
+    authentication_classes = [JWTAuthentication]
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get(self, request, *args, **kwargs):
+        try:
+            User = get_user_model()
+            with connection.cursor() as cursor:
+                # columnas presentes según la migración inicial: start, end, shift_type, role_in_shift, employee_id
+                cursor.execute("SELECT id, start, end, shift_type, role_in_shift, employee_id FROM shifts_shift")
+                rows = cursor.fetchall()
+
+            shifts = []
+            for row in rows:
+                pk, start_dt, end_dt, shift_type, role_in_shift, employee_id = row
+                employee_name = None
+                try:
+                    user = User.objects.get(pk=employee_id)
+                    employee_name = f"{user.first_name} {user.last_name}".strip()
+                except Exception:
+                    # no bloqueamos por falta de nombre; puede ser nulo en la BD
+                    employee_name = None
+
+                shifts.append({
+                    'id': pk,
+                    'start': start_dt.isoformat() if start_dt is not None else None,
+                    'end': end_dt.isoformat() if end_dt is not None else None,
+                    'shift_type': shift_type,
+                    'role': role_in_shift,
+                    'employee_id': employee_id,
+                    'employee_name': employee_name,
+                })
+
+            return Response(shifts)
+        except Exception as exc:
+            logging.exception("Error fetching shifts for API")
+            return Response({'detail': 'Error al obtener turnos'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
