@@ -8,7 +8,7 @@ logger = logging.getLogger(__name__)
 class EmailService:
     def __init__(self):
         self.sg = SendGridAPIClient(os.environ.get('SENDGRID_API_KEY'))
-        self.from_email = os.environ.get('EMAIL_FROM', 'noreply@shiftscheduler.com')
+        self.from_email = os.environ.get('EMAIL_FROM') or os.environ.get('DEFAULT_FROM_EMAIL', 'soporteshiftscheduleri@gmail.com')
         self.frontend_url = os.environ.get('FRONTEND_URL', 'https://shiftschedulerl.vercel.app')
     
     def send_password_reset_email(self, to_email, reset_token, user_name=None):
