@@ -131,19 +131,25 @@ CORS_ALLOWED_ORIGINS = [
 
 CORS_ALLOW_CREDENTIALS = True
 
-# Cabeceras y métodos explícitos para asegurar que la preflight request
-# reciba Access-Control-Allow-Headers y Access-Control-Allow-Methods.
-CORS_ALLOW_HEADERS = list(default_headers) + [
-    'Authorization',
-    'Content-Type',
+CORS_ALLOW_HEADERS = [
+    'accept',
+    'accept-encoding',
+    'authorization',
+    'content-type',
+    'dnt',
+    'origin',
+    'user-agent',
+    'x-csrftoken',
+    'x-requested-with',
 ]
 
-CORS_ALLOW_METHODS = list(default_methods)
-
-# Regex de orígenes adicionales (útil en producción y para subdominios dinámicos)
-CORS_ALLOWED_ORIGIN_REGEXES = [
-    r"^http://localhost(:[0-9]+)?$",
-    r"^https?://.*\.railway\.app$",
+CORS_ALLOW_METHODS = [
+    'DELETE',
+    'GET',
+    'OPTIONS',
+    'PATCH',
+    'POST',
+    'PUT',
 ]
 
 if DEBUG:
