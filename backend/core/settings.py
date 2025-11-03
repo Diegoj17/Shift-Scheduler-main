@@ -35,6 +35,8 @@ INSTALLED_APPS = [
 
 MIDDLEWARE = [
     "corsheaders.middleware.CorsMiddleware",
+    # Nuestro middleware añade cabeceras CORS a responses de error generadas por Django
+    "core.middleware.EnsureCORSOnExceptionMiddleware",
     "django.middleware.security.SecurityMiddleware",
     "whitenoise.middleware.WhiteNoiseMiddleware",
     "django.contrib.sessions.middleware.SessionMiddleware",
