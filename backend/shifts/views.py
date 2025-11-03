@@ -15,6 +15,9 @@ from rest_framework.response import Response
 from rest_framework import status, permissions
 from rest_framework_simplejwt.authentication import JWTAuthentication
 from .serializers import ShiftTypeSerializer
+import logging
+import traceback
+from django.conf import settings
 
 
 class ShiftListView(ListView):
@@ -215,11 +218,20 @@ class ShiftTypeCreateAPIView(APIView):
     permission_classes = [permissions.IsAuthenticated]
 
     def post(self, request, *args, **kwargs):
-        serializer = ShiftTypeSerializer(data=request.data)
-        if serializer.is_valid():
-            instance = serializer.save()
-            return Response(ShiftTypeSerializer(instance).data, status=status.HTTP_201_CREATED)
-        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+        try:
+            serializer = ShiftTypeSerializer(data=request.data)
+            if serializer.is_valid():
+                instance = serializer.save()
+                return Response(ShiftTypeSerializer(instance).data, status=status.HTTP_201_CREATED)
+            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+        except Exception as exc:
+            # Log full traceback for server logs
+            logging.exception("Unhandled exception creating ShiftType")
+            # In DEBUG return full traceback to help debugging; in production return generic message
+            if getattr(settings, 'DEBUG', False):
+                tb = traceback.format_exc()
+                return Response({'detail': str(exc), 'traceback': tb}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+            return Response({'detail': 'Internal server error while creating ShiftType'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 class ShiftTypeUpdateAPIView(APIView):
     """API para actualizar tipos de turno"""
