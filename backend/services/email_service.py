@@ -2,6 +2,7 @@ import os
 import logging
 from sendgrid import SendGridAPIClient
 from sendgrid.helpers.mail import Mail, To, From
+import secrets
 
 logger = logging.getLogger(__name__)
 
@@ -349,3 +350,12 @@ def get_email_service():
     if email_service is None:
         email_service = EmailService()
     return email_service
+
+
+def generate_reset_token(length: int = 32) -> str:
+    """Genera un token seguro apto para usar en enlaces de restablecimiento.
+
+    Usa secrets.token_urlsafe para producir una cadena URL-safe. El parámetro
+    length controla la entropía aproximada (por defecto 32 bytes).
+    """
+    return secrets.token_urlsafe(length)
