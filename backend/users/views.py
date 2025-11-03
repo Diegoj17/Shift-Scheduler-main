@@ -13,6 +13,8 @@ from rest_framework.views import APIView
 from rest_framework_simplejwt.tokens import RefreshToken
 from .serializers import LoginSerializer, RegisterSerializer, UserPublicSerializer, AdminCreateUserSerializer,AdminUpdateUserSerializer, AssignRolePermsSerializer
 from . import serializers as user_serializers
+from django.views.decorators.csrf import ensure_csrf_cookie
+from django.http import JsonResponse
 
 class RegisterView(APIView):
     authentication_classes = []
@@ -399,7 +401,14 @@ class AdminBlockUserView(APIView):
         # (Opcional) registrar auditoría
         print(f"[AUDITORÍA] {request.user.email} bloqueó al usuario {user.email}")
 
-        return Response({"message": "Usuario bloqueado con éxito."}, status=200)
+
+# Endpoint ligero para forzar que Django establezca la cookie CSRF en el cliente.
+# Útil para SPAs que necesitan que el navegador tenga 'csrftoken' antes de realizar POST
+# con autenticación por sesión. El decorador ensure_csrf_cookie añade la cookie.
+@ensure_csrf_cookie
+def csrf(request):
+    return JsonResponse({"detail": "CSRF cookie set"})
+
 
 
 User = get_user_model()

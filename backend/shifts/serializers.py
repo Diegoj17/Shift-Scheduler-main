@@ -52,3 +52,17 @@ class ShiftSerializer(serializers.ModelSerializer):
         if request and request.user.is_authenticated:
             validated_data['created_by'] = request.user
         return super().create(validated_data)
+
+
+class ShiftTypeSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = __import__('shifts.models', fromlist=['ShiftType']).ShiftType
+        fields = ('id', 'name', 'start_time', 'end_time', 'color')
+        read_only_fields = ('id',)
+
+    def validate(self, data):
+        start = data.get('start_time')
+        end = data.get('end_time')
+        if start and end and start >= end:
+            raise serializers.ValidationError("La hora de fin debe ser mayor a la hora de inicio")
+        return data
