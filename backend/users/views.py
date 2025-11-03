@@ -1,5 +1,6 @@
 import time
 import threading
+import logging
 from .models import User
 from django.conf import settings
 from django.core.cache import cache
@@ -71,35 +72,43 @@ token_generator = PasswordResetTokenGenerator()
 class PasswordResetView(APIView):
     def post(self, request):
         email = request.data.get('email')
-        
+        # Always return a generic success message for security (do not disclose if email exists).
+        # Perform the email send asynchronously to avoid blocking the request and risking
+        # a gateway/proxy timeout (which can produce a 502 and no CORS headers).
+        def _send_reset(to_email, user_name, reset_token):
+            try:
+                email_service = get_email_service()
+                success = email_service.send_password_reset_email(
+                    to_email=to_email,
+                    reset_token=reset_token,
+                    user_name=user_name
+                )
+                if not success:
+                    logging.getLogger('users').warning(f"Failed to send password reset email to {to_email}")
+            except Exception as e:
+                logging.getLogger('users').exception(f"Exception while sending password reset email to {to_email}: {e}")
+
         try:
             user = User.objects.get(email=email)
-            
-            # Generar token
             reset_token = generate_reset_token()
-            
-            # Enviar email usando el servicio
-            email_service = get_email_service()
-            success = email_service.send_password_reset_email(
-                to_email=user.email,
-                reset_token=reset_token,
-                user_name=user.first_name or user.email
-            )
-            
-            if success:
-                return Response({
-                    "message": "Email de recuperación enviado"
-                }, status=200)
-            else:
-                return Response({
-                    "error": "Error al enviar el email"
-                }, status=500)
-                
+            # Guardar token en cache con TTL para validación posterior
+            try:
+                timeout = getattr(settings, 'PASSWORD_RESET_TIMEOUT', 3600)
+                cache_key = f"password_reset:{reset_token}"
+                cache.set(cache_key, str(user.pk), timeout)
+                logging.getLogger('users').debug(f"Stored password reset token in cache for user {user.pk}")
+            except Exception as e:
+                logging.getLogger('users').exception(f"Could not store reset token in cache: {e}")
+            # Dispatch async email sender
+            threading.Thread(target=_send_reset, args=(user.email, user.first_name or user.email, reset_token), daemon=True).start()
         except User.DoesNotExist:
-            # Por seguridad, devolver el mismo mensaje
-            return Response({
-                "message": "Si el email existe, recibirás instrucciones"
-            }, status=200)
+            # Intentionally ignore: we still return the same response below.
+            logging.getLogger('users').info(f"Password reset requested for non-existing email: {email}")
+        except Exception as e:
+            # Catch unexpected errors during lookup/generation and log them; still return generic response.
+            logging.getLogger('users').exception(f"Unexpected error during password reset request for {email}: {e}")
+
+        return Response({"message": "Si el email existe, recibirás instrucciones"}, status=200)
 
 
 class PasswordResetConfirmView(APIView):
@@ -113,6 +122,22 @@ class PasswordResetConfirmView(APIView):
         if 'token' not in data and 'token' in request.query_params:
             data['token'] = request.query_params.get('token')
 
+        # Soporte para flujo simplificado: si el cliente envía solo 'token' (sin uid),
+        # buscamos en cache el user id asociado y rellenamos uid para que el serializer
+        # existente (que valida uid via urlsafe_base64_decode) funcione.
+        token = data.get('token')
+        if token and not data.get('uid'):
+            try:
+                cache_key = f"password_reset:{token}"
+                user_pk = cache.get(cache_key)
+                if user_pk:
+                    # encodear el pk como uidb64 esperado por el serializer
+                    data['uid'] = urlsafe_base64_encode(smart_bytes(user_pk))
+                else:
+                    logging.getLogger('users').warning(f"Password reset token not found in cache: {token}")
+            except Exception as e:
+                logging.getLogger('users').exception(f"Error checking password reset token in cache: {e}")
+
         ser = PasswordResetConfirmSerializer(data=data)
         if not ser.is_valid():
             return Response(ser.errors, status=status.HTTP_400_BAD_REQUEST)
@@ -121,6 +146,16 @@ class PasswordResetConfirmView(APIView):
         new_pw = ser.validated_data["new_password"]
         user.set_password(new_pw)
         user.save()
+
+        # Si vino por nuestro token cacheado, eliminarlo para que no pueda reutilizarse
+        try:
+            token = data.get('token')
+            if token:
+                cache_key = f"password_reset:{token}"
+                cache.delete(cache_key)
+                logging.getLogger('users').debug(f"Deleted password reset token from cache: {token}")
+        except Exception:
+            pass
 
         # Envío ASÍNCRONO de confirmación
         def _send_confirmation_email():
