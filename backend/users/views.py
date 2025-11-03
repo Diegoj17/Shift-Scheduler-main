@@ -15,6 +15,8 @@ from rest_framework_simplejwt.tokens import RefreshToken
 from .serializers import LoginSerializer, RegisterSerializer, UserPublicSerializer, AdminCreateUserSerializer,AdminUpdateUserSerializer, AssignRolePermsSerializer
 from . import serializers as user_serializers
 from services import email_service
+from django.views.decorators.csrf import ensure_csrf_cookie
+from django.http import JsonResponse
 
 
 class RegisterView(APIView):
@@ -438,3 +440,7 @@ class AdminUserAccessView(APIView):
                 "permissions": user.permissions or []
             }
         }, status=200)
+
+@ensure_csrf_cookie
+def csrf(request):
+    return JsonResponse({"detail": "CSRF cookie set"})
