@@ -1,7 +1,7 @@
 from django.urls import path
 from rest_framework_simplejwt.views import TokenRefreshView
 from .views import RegisterView, LoginView, MeView, PasswordResetRequestView, PasswordResetConfirmView, AdminCreateUserView,AdminUserDetailView,AdminUpdateUserView,AdminBlockUserView,AdminUserAccessView
-from .views import AdminListNonGerenteUsersView
+from .views import AdminListNonGerenteUsersView, csrf
 
 urlpatterns = [
     path("register/", RegisterView.as_view(), name="auth-register"),
@@ -16,4 +16,6 @@ urlpatterns = [
     path("users/<int:pk>/update/", AdminUpdateUserView.as_view(), name="user-update-admin"),
     path("users/<int:pk>/block/", AdminBlockUserView.as_view(), name="user-block-admin"),
     path("users/<int:pk>/access/", AdminUserAccessView.as_view(), name="user-access-admin"),
+    # Endpoint para que el cliente SPA obtenga la cookie 'csrftoken'
+    path("csrf/", csrf, name="csrf-cookie"),
 ]
