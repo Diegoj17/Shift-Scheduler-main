@@ -22,6 +22,10 @@ urlpatterns = [
     path("admin/", admin.site.urls),
     path("api/auth/", include("users.urls")),
     path("api/shifts/", include("shifts.urls")),
+    # Compatibilidad temporal: algunos clientes hacen peticiones a /api/api/...
+    # (doble 'api'). Añadimos este include para evitar 404 hasta que el
+    # frontend sea corregido.
+    path("api/", include("shifts.urls")),
     # Health check simple para comprobar que la app responde (útil para deploys y debugging)
     path("health/", lambda request: JsonResponse({"status": "ok"})),
 ]
