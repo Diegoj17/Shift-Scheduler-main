@@ -2,7 +2,6 @@ import os
 import logging
 from sendgrid import SendGridAPIClient
 from sendgrid.helpers.mail import Mail, To, From
-import secrets
 
 logger = logging.getLogger(__name__)
 
@@ -14,7 +13,6 @@ class EmailService:
             raise ValueError("SENDGRID_API_KEY no configurada")
         
         self.sg = SendGridAPIClient(api_key)
-        # ✅ CORRECCIÓN: Usar el mismo email que está en Railway
         self.from_email = os.environ.get('EMAIL_FROM', 'soporteshiftscheduler1@gmail.com')
         self.frontend_url = os.environ.get('FRONTEND_URL', 'https://shiftscheduler1.vercel.app')
         logger.info(f"EmailService inicializado con from_email: {self.from_email}")
@@ -22,178 +20,175 @@ class EmailService:
     def send_password_reset_email(self, to_email, reset_token, user_name=None):
         """
         Envía email de recuperación de contraseña
+        OPTIMIZADO PARA EVITAR SPAM
         """
         try:
-            # Construir la URL de reset
             reset_url = f"{self.frontend_url}/reset-password/config.html?token={reset_token}"
             
-            # Plantilla HTML
+            # HTML optimizado para deliverability
             html_content = f"""
             <!DOCTYPE html>
-            <html>
+            <html lang="es">
             <head>
                 <meta charset="utf-8">
                 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-                <style>
-                    body {{ 
-                        font-family: Arial, sans-serif; 
-                        line-height: 1.6; 
-                        color: #333;
-                        margin: 0;
-                        padding: 0;
-                        background-color: #f4f4f4;
-                    }}
-                    .container {{ 
-                        max-width: 600px; 
-                        margin: 20px auto; 
-                        background-color: #ffffff;
-                        border-radius: 8px;
-                        overflow: hidden;
-                        box-shadow: 0 2px 4px rgba(0,0,0,0.1);
-                    }}
-                    .header {{ 
-                        background: linear-gradient(135deg, #007bff 0%, #0056b3 100%);
-                        color: white; 
-                        padding: 30px 20px; 
-                        text-align: center;
-                    }}
-                    .header h1 {{
-                        margin: 0;
-                        font-size: 24px;
-                        font-weight: 600;
-                    }}
-                    .content {{ 
-                        padding: 30px 20px;
-                        background: #ffffff;
-                    }}
-                    .content h2 {{
-                        color: #333;
-                        font-size: 20px;
-                        margin-top: 0;
-                    }}
-                    .content p {{
-                        margin: 15px 0;
-                        color: #555;
-                    }}
-                    .button {{ 
-                        display: inline-block; 
-                        padding: 14px 28px; 
-                        background: #007bff;
-                        color: white !important; 
-                        text-decoration: none; 
-                        border-radius: 5px;
-                        font-weight: 600;
-                        margin: 20px 0;
-                        transition: background 0.3s ease;
-                    }}
-                    .button:hover {{
-                        background: #0056b3;
-                    }}
-                    .url-box {{
-                        background: #f8f9fa;
-                        padding: 15px;
-                        border-radius: 5px;
-                        border-left: 4px solid #007bff;
-                        margin: 20px 0;
-                        word-break: break-all;
-                    }}
-                    .url-box a {{
-                        color: #007bff;
-                        text-decoration: none;
-                    }}
-                    .warning {{
-                        background: #fff3cd;
-                        border-left: 4px solid #ffc107;
-                        padding: 12px;
-                        margin: 20px 0;
-                        border-radius: 4px;
-                    }}
-                    .footer {{ 
-                        padding: 20px; 
-                        text-align: center; 
-                        font-size: 12px; 
-                        color: #666;
-                        background: #f8f9fa;
-                        border-top: 1px solid #e9ecef;
-                    }}
-                </style>
+                <title>Restablecimiento de contraseña</title>
             </head>
-            <body>
-                <div class="container">
-                    <div class="header">
-                        <h1>🔐 Recuperación de Contraseña</h1>
+            <body style="font-family: 'Segoe UI', Arial, sans-serif; line-height: 1.6; color: #333333; max-width: 600px; margin: 0 auto; padding: 20px; background-color: #f5f5f5;">
+                
+                <!-- Container Principal -->
+                <div style="background-color: #ffffff; border-radius: 8px; overflow: hidden; box-shadow: 0 2px 4px rgba(0,0,0,0.1);">
+                    
+                    <!-- Header -->
+                    <div style="background: linear-gradient(135deg, #3498db 0%, #2980b9 100%); padding: 30px; text-align: center;">
+                        <h1 style="color: #ffffff; margin: 0; font-size: 24px; font-weight: 600;">Shift Scheduler</h1>
                     </div>
-                    <div class="content">
-                        <h2>Hola {user_name or 'Usuario'},</h2>
-                        <p>Hemos recibido una solicitud para restablecer la contraseña de tu cuenta en <strong>Shift Scheduler</strong>.</p>
-                        <p>Haz clic en el botón de abajo para crear una nueva contraseña:</p>
+                    
+                    <!-- Contenido -->
+                    <div style="padding: 40px 30px;">
                         
-                        <div style="text-align: center; margin: 30px 0;">
-                            <a href="{reset_url}" class="button">Restablecer Contraseña</a>
+                        <h2 style="color: #2c3e50; margin-top: 0; margin-bottom: 20px; font-size: 20px; font-weight: 600;">
+                            Restablecimiento de contraseña
+                        </h2>
+                        
+                        <p style="margin: 15px 0; color: #555555; font-size: 15px;">
+                            Hola {user_name or 'Usuario'},
+                        </p>
+                        
+                        <p style="margin: 15px 0; color: #555555; font-size: 15px;">
+                            Hemos recibido una solicitud para restablecer la contraseña de tu cuenta en Shift Scheduler. 
+                            Si no realizaste esta solicitud, puedes ignorar este correo de forma segura.
+                        </p>
+                        
+                        <p style="margin: 15px 0; color: #555555; font-size: 15px;">
+                            Para continuar con el restablecimiento de tu contraseña, haz clic en el siguiente botón:
+                        </p>
+                        
+                        <!-- Botón CTA -->
+                        <div style="text-align: center; margin: 35px 0;">
+                            <a href="{reset_url}" 
+                               style="display: inline-block; 
+                                      padding: 15px 35px; 
+                                      background-color: #3498db; 
+                                      color: #ffffff !important; 
+                                      text-decoration: none; 
+                                      border-radius: 5px; 
+                                      font-weight: 600;
+                                      font-size: 16px;
+                                      box-shadow: 0 2px 4px rgba(0,0,0,0.1);">
+                                Restablecer mi contraseña
+                            </a>
                         </div>
                         
-                        <p>Si el botón no funciona, copia y pega este enlace en tu navegador:</p>
-                        <div class="url-box">
-                            <a href="{reset_url}">{reset_url}</a>
+                        <!-- Enlace alternativo -->
+                        <div style="background-color: #f8f9fa; padding: 20px; border-radius: 5px; margin: 25px 0;">
+                            <p style="margin: 0 0 10px 0; font-size: 14px; color: #666666;">
+                                Si el botón no funciona, copia y pega el siguiente enlace en tu navegador:
+                            </p>
+                            <p style="margin: 0; word-break: break-all; font-size: 13px;">
+                                <a href="{reset_url}" style="color: #3498db; text-decoration: none;">{reset_url}</a>
+                            </p>
                         </div>
                         
-                        <div class="warning">
-                            <strong>⚠️ Importante:</strong> Este enlace expirará en <strong>1 hora</strong> por razones de seguridad.
+                        <!-- Información importante -->
+                        <div style="background-color: #fff3cd; border-left: 4px solid #ffc107; padding: 15px; margin: 25px 0; border-radius: 4px;">
+                            <p style="margin: 0; font-size: 14px; color: #856404;">
+                                <strong>Nota importante:</strong> Este enlace es válido por 1 hora. 
+                                Si expira, puedes solicitar uno nuevo desde nuestra página de inicio de sesión.
+                            </p>
                         </div>
                         
-                        <p style="margin-top: 30px; color: #666; font-size: 14px;">
-                            Si no solicitaste este cambio, puedes ignorar este correo de forma segura. Tu contraseña no cambiará.
+                        <!-- Soporte -->
+                        <p style="margin: 30px 0 10px 0; font-size: 14px; color: #666666;">
+                            Si tienes alguna pregunta o necesitas ayuda, no dudes en contactarnos 
+                            respondiendo a este correo.
+                        </p>
+                        
+                        <p style="margin: 25px 0 0 0; font-size: 15px; color: #555555;">
+                            Saludos cordiales,<br>
+                            <strong style="color: #2c3e50;">El equipo de Shift Scheduler</strong>
+                        </p>
+                        
+                    </div>
+                    
+                    <!-- Footer -->
+                    <div style="background-color: #f8f9fa; padding: 25px 30px; border-top: 1px solid #e9ecef;">
+                        <p style="margin: 5px 0; font-size: 12px; color: #999999; text-align: center;">
+                            © 2025 Shift Scheduler. Todos los derechos reservados.
+                        </p>
+                        <p style="margin: 5px 0; font-size: 12px; color: #999999; text-align: center;">
+                            Desarrollado por Casi Tech - Grupo 9 AyD
+                        </p>
+                        <p style="margin: 15px 0 5px 0; font-size: 11px; color: #aaaaaa; text-align: center;">
+                            Este correo fue enviado a {to_email} porque solicitaste restablecer tu contraseña.
                         </p>
                     </div>
-                    <div class="footer">
-                        <p style="margin: 5px 0;">© 2025 Shift Scheduler - Todos los derechos reservados</p>
-                        <p style="margin: 5px 0; color: #999;">Desarrollado por: Casi Tech - Grupo 9 AyD</p>
-                    </div>
+                    
                 </div>
+                
             </body>
             </html>
             """
             
-            # Contenido de texto plano
+            # Texto plano COMPLETO y bien formateado (crítico para deliverability)
             plain_content = f"""
-Recuperación de Contraseña - Shift Scheduler
+SHIFT SCHEDULER
+Restablecimiento de contraseña
+
+================================================================================
 
 Hola {user_name or 'Usuario'},
 
-Hemos recibido una solicitud para restablecer la contraseña de tu cuenta.
+Hemos recibido una solicitud para restablecer la contraseña de tu cuenta en 
+Shift Scheduler.
 
-Haz clic en el siguiente enlace para crear una nueva contraseña:
+Para continuar con el restablecimiento, visita el siguiente enlace:
+
 {reset_url}
 
-⚠️ IMPORTANTE: Este enlace expirará en 1 hora por razones de seguridad.
+NOTA IMPORTANTE: 
+Este enlace es válido por 1 hora. Si expira, puedes solicitar uno nuevo 
+desde nuestra página de inicio de sesión.
 
-Si no solicitaste este cambio, puedes ignorar este correo de forma segura.
+Si no realizaste esta solicitud, puedes ignorar este correo de forma segura. 
+Tu contraseña no será modificada.
 
----
-© 2025 Shift Scheduler - Todos los derechos reservados
-Desarrollado por: Casi Tech - Grupo 9 AyD
+SOPORTE:
+Si tienes alguna pregunta o necesitas ayuda, no dudes en contactarnos 
+respondiendo a este correo.
+
+Saludos cordiales,
+El equipo de Shift Scheduler
+
+================================================================================
+
+© 2025 Shift Scheduler. Todos los derechos reservados.
+Desarrollado por Casi Tech - Grupo 9 AyD
+
+Este correo fue enviado a {to_email} porque solicitaste restablecer tu 
+contraseña.
             """
             
-            # Crear el mensaje
+            # Crear el mensaje con headers optimizados
             message = Mail(
                 from_email=From(self.from_email, "Shift Scheduler"),
                 to_emails=To(to_email),
-                subject="Recuperación de Contraseña - Shift Scheduler",
+                subject="Restablecimiento de contraseña - Shift Scheduler",
                 html_content=html_content,
                 plain_text_content=plain_content
             )
             
-            # Enviar el email
+            # Headers adicionales para mejorar deliverability
+            message.add_header("Reply-To", self.from_email)
+            message.add_header("X-Priority", "3")
+            message.add_header("Importance", "Normal")
+            
+            # Enviar
             response = self.sg.send(message)
             
-            # Log de éxito
             logger.info(f"✓ Email de recuperación enviado a {to_email}. Status: {response.status_code}")
             
-            if response.status_code == 202:
-                return True
-            else:
-                logger.warning(f"Código de respuesta inusual: {response.status_code}")
-                return False
+            return response.status_code == 202
             
         except Exception as e:
             logger.error(f"❌ Error enviando email de recuperación a {to_email}: {str(e)}", exc_info=True)
@@ -202,143 +197,142 @@ Desarrollado por: Casi Tech - Grupo 9 AyD
     def send_password_updated_email(self, to_email, user_name=None):
         """
         Envía email confirmando que la contraseña fue actualizada
+        OPTIMIZADO PARA EVITAR SPAM
         """
         try:
-            # Plantilla HTML
             html_content = f"""
             <!DOCTYPE html>
-            <html>
+            <html lang="es">
             <head>
                 <meta charset="utf-8">
                 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-                <style>
-                    body {{ 
-                        font-family: Arial, sans-serif; 
-                        line-height: 1.6; 
-                        color: #333;
-                        margin: 0;
-                        padding: 0;
-                        background-color: #f4f4f4;
-                    }}
-                    .container {{ 
-                        max-width: 600px; 
-                        margin: 20px auto; 
-                        background-color: #ffffff;
-                        border-radius: 8px;
-                        overflow: hidden;
-                        box-shadow: 0 2px 4px rgba(0,0,0,0.1);
-                    }}
-                    .header {{ 
-                        background: linear-gradient(135deg, #28a745 0%, #20833b 100%);
-                        color: white; 
-                        padding: 30px 20px; 
-                        text-align: center;
-                    }}
-                    .header h1 {{
-                        margin: 0;
-                        font-size: 24px;
-                        font-weight: 600;
-                    }}
-                    .content {{ 
-                        padding: 30px 20px;
-                        background: #ffffff;
-                    }}
-                    .content p {{
-                        margin: 15px 0;
-                        color: #555;
-                    }}
-                    .success-icon {{
-                        text-align: center;
-                        font-size: 48px;
-                        margin: 20px 0;
-                    }}
-                    .alert {{
-                        background: #fff3cd;
-                        border-left: 4px solid #ffc107;
-                        padding: 15px;
-                        margin: 20px 0;
-                        border-radius: 4px;
-                    }}
-                    .footer {{ 
-                        padding: 20px; 
-                        text-align: center; 
-                        font-size: 12px; 
-                        color: #666;
-                        background: #f8f9fa;
-                        border-top: 1px solid #e9ecef;
-                    }}
-                </style>
+                <title>Contraseña actualizada</title>
             </head>
-            <body>
-                <div class="container">
-                    <div class="header">
-                        <h1>✅ Contraseña Actualizada</h1>
+            <body style="font-family: 'Segoe UI', Arial, sans-serif; line-height: 1.6; color: #333333; max-width: 600px; margin: 0 auto; padding: 20px; background-color: #f5f5f5;">
+                
+                <div style="background-color: #ffffff; border-radius: 8px; overflow: hidden; box-shadow: 0 2px 4px rgba(0,0,0,0.1);">
+                    
+                    <!-- Header -->
+                    <div style="background: linear-gradient(135deg, #28a745 0%, #20833b 100%); padding: 30px; text-align: center;">
+                        <h1 style="color: #ffffff; margin: 0; font-size: 24px; font-weight: 600;">Shift Scheduler</h1>
                     </div>
-                    <div class="content">
-                        <div class="success-icon">🔒</div>
-                        <p><strong>Hola {user_name or 'Usuario'},</strong></p>
-                        <p>Te confirmamos que tu contraseña ha sido <strong>actualizada correctamente</strong> en Shift Scheduler.</p>
+                    
+                    <!-- Contenido -->
+                    <div style="padding: 40px 30px;">
                         
-                        <div class="alert">
-                            <strong>⚠️ ¿No fuiste tú?</strong><br>
-                            Si no realizaste este cambio, te recomendamos:
-                            <ul style="margin: 10px 0;">
-                                <li>Restablecer tu contraseña inmediatamente</li>
-                                <li>Contactar con nuestro equipo de soporte</li>
-                            </ul>
+                        <div style="text-align: center; margin-bottom: 25px;">
+                            <div style="display: inline-block; width: 60px; height: 60px; background-color: #d4edda; border-radius: 50%; line-height: 60px; font-size: 30px;">
+                                ✓
+                            </div>
                         </div>
                         
-                        <p style="margin-top: 30px; color: #666;">
-                            Gracias por usar Shift Scheduler. Si tienes alguna pregunta, no dudes en contactarnos.
+                        <h2 style="color: #2c3e50; margin: 0 0 20px 0; font-size: 20px; font-weight: 600; text-align: center;">
+                            Contraseña actualizada correctamente
+                        </h2>
+                        
+                        <p style="margin: 15px 0; color: #555555; font-size: 15px;">
+                            Hola {user_name or 'Usuario'},
+                        </p>
+                        
+                        <p style="margin: 15px 0; color: #555555; font-size: 15px;">
+                            Te confirmamos que la contraseña de tu cuenta en Shift Scheduler ha sido 
+                            actualizada correctamente.
+                        </p>
+                        
+                        <p style="margin: 15px 0; color: #555555; font-size: 15px;">
+                            Ahora puedes iniciar sesión con tu nueva contraseña.
+                        </p>
+                        
+                        <!-- Alerta de seguridad -->
+                        <div style="background-color: #fff3cd; border-left: 4px solid #ffc107; padding: 15px; margin: 25px 0; border-radius: 4px;">
+                            <p style="margin: 0 0 10px 0; font-size: 14px; color: #856404;">
+                                <strong>¿No fuiste tú?</strong>
+                            </p>
+                            <p style="margin: 0; font-size: 14px; color: #856404;">
+                                Si no realizaste este cambio, te recomendamos restablecer tu contraseña 
+                                inmediatamente y contactar con nuestro equipo de soporte.
+                            </p>
+                        </div>
+                        
+                        <p style="margin: 30px 0 10px 0; font-size: 14px; color: #666666;">
+                            Si tienes alguna pregunta, no dudes en contactarnos respondiendo a este correo.
+                        </p>
+                        
+                        <p style="margin: 25px 0 0 0; font-size: 15px; color: #555555;">
+                            Saludos cordiales,<br>
+                            <strong style="color: #2c3e50;">El equipo de Shift Scheduler</strong>
+                        </p>
+                        
+                    </div>
+                    
+                    <!-- Footer -->
+                    <div style="background-color: #f8f9fa; padding: 25px 30px; border-top: 1px solid #e9ecef;">
+                        <p style="margin: 5px 0; font-size: 12px; color: #999999; text-align: center;">
+                            © 2025 Shift Scheduler. Todos los derechos reservados.
+                        </p>
+                        <p style="margin: 5px 0; font-size: 12px; color: #999999; text-align: center;">
+                            Desarrollado por Casi Tech - Grupo 9 AyD
+                        </p>
+                        <p style="margin: 15px 0 5px 0; font-size: 11px; color: #aaaaaa; text-align: center;">
+                            Este es un correo informativo sobre la seguridad de tu cuenta.
                         </p>
                     </div>
-                    <div class="footer">
-                        <p style="margin: 5px 0;">© 2025 Shift Scheduler - Todos los derechos reservados</p>
-                        <p style="margin: 5px 0; color: #999;">Desarrollado por: Casi Tech - Grupo 9 AyD</p>
-                    </div>
+                    
                 </div>
+                
             </body>
             </html>
             """
             
-            # Contenido de texto plano
             plain_content = f"""
-Contraseña Actualizada - Shift Scheduler
+SHIFT SCHEDULER
+Contraseña actualizada correctamente
+
+================================================================================
 
 Hola {user_name or 'Usuario'},
 
-Te confirmamos que tu contraseña ha sido actualizada correctamente.
+Te confirmamos que la contraseña de tu cuenta en Shift Scheduler ha sido 
+actualizada correctamente.
 
-⚠️ ¿NO FUISTE TÚ?
-Si no realizaste este cambio, te recomendamos restablecer tu contraseña inmediatamente y contactar con nuestro equipo de soporte.
+Ahora puedes iniciar sesión con tu nueva contraseña.
 
-Gracias por usar Shift Scheduler.
+¿NO FUISTE TÚ?
+Si no realizaste este cambio, te recomendamos restablecer tu contraseña 
+inmediatamente y contactar con nuestro equipo de soporte.
 
----
-© 2025 Shift Scheduler - Todos los derechos reservados
-Desarrollado por: Casi Tech - Grupo 9 AyD
+SOPORTE:
+Si tienes alguna pregunta, no dudes en contactarnos respondiendo a este correo.
+
+Saludos cordiales,
+El equipo de Shift Scheduler
+
+================================================================================
+
+© 2025 Shift Scheduler. Todos los derechos reservados.
+Desarrollado por Casi Tech - Grupo 9 AyD
+
+Este es un correo informativo sobre la seguridad de tu cuenta.
             """
             
-            # Crear el mensaje
             message = Mail(
                 from_email=From(self.from_email, "Shift Scheduler"),
                 to_emails=To(to_email),
-                subject="Contraseña Actualizada - Shift Scheduler",
+                subject="Contraseña actualizada - Shift Scheduler",
                 html_content=html_content,
                 plain_text_content=plain_content
             )
             
-            # Enviar el email
+            # Headers adicionales
+            message.add_header("Reply-To", self.from_email)
+            message.add_header("X-Priority", "3")
+            message.add_header("Importance", "Normal")
+            
             response = self.sg.send(message)
             
-            # Log de éxito
             logger.info(f"✓ Email de confirmación enviado a {to_email}. Status: {response.status_code}")
             
-            if response.status_code == 202:
-                return True
-            else:
-                logger.warning(f"Código de respuesta inusual: {response.status_code}")
-                return False
+            return response.status_code == 202
             
         except Exception as e:
             logger.error(f"❌ Error enviando email de confirmación a {to_email}: {str(e)}", exc_info=True)
@@ -355,12 +349,3 @@ def get_email_service():
     if email_service is None:
         email_service = EmailService()
     return email_service
-
-
-def generate_reset_token(length: int = 48) -> str:
-    """
-    Genera un token seguro para usar en enlaces de restablecimiento de contraseña.
-    Se usa un token URL-safe. La expiración/validación del token debe
-    implementarse por separado (por ejemplo guardándolo en cache o DB).
-    """
-    return secrets.token_urlsafe(length)

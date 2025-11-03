@@ -4,7 +4,8 @@ from . import views
 urlpatterns = [
     # Turnos
     path('', views.shift_calendar, name='shift_calendar'),
-    path('shifts/', views.ShiftListView.as_view(), name='shift_list'),
+    # API-friendly endpoint: return JSON list for frontend calendar
+    path('shifts/', views.ShiftListAPIView.as_view(), name='shift_list'),
     path('shifts/new/', views.ShiftCreateView.as_view(), name='shift_create'),
     path('shifts/<int:pk>/edit/', views.ShiftUpdateView.as_view(), name='shift_edit'),
     path('shifts/<int:pk>/delete/', views.ShiftDeleteView.as_view(), name='shift_delete'),
