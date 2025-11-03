@@ -1,15 +1,21 @@
 import os
+import logging
 from sendgrid import SendGridAPIClient
 from sendgrid.helpers.mail import Mail, To, From
-import logging
 
 logger = logging.getLogger(__name__)
 
 class EmailService:
     def __init__(self):
-        self.sg = SendGridAPIClient(os.environ.get('SENDGRID_API_KEY'))
+        api_key = os.environ.get('SENDGRID_API_KEY')
+        if not api_key:
+            logger.error("SENDGRID_API_KEY no encontrada en variables de entorno")
+            raise ValueError("SENDGRID_API_KEY no configurada")
+        
+        self.sg = SendGridAPIClient(api_key)
         self.from_email = os.environ.get('EMAIL_FROM') or os.environ.get('DEFAULT_FROM_EMAIL', 'soporteshiftscheduleri@gmail.com')
-        self.frontend_url = os.environ.get('FRONTEND_URL', 'https://shiftschedulerl.vercel.app')
+        self.frontend_url = os.environ.get('FRONTEND_URL', 'https://shiftschedulert.vercel.app')
+        logger.info(f"EmailService inicializado con: {self.from_email}")
     
     def send_password_reset_email(self, to_email, reset_token, user_name=None):
         """
@@ -18,7 +24,7 @@ class EmailService:
         try:
             reset_url = f"{self.frontend_url}/reset-password/config.html?token={reset_token}"
             
-            # Plantilla HTML para recuperación de contraseña
+            # Usar la plantilla que proporcionaste
             html_content = f"""
             <!DOCTYPE html>
             <html>
@@ -37,46 +43,43 @@ class EmailService:
             <body>
                 <div class="container">
                     <div class="header">
-                        <h1>Recuperación de Contraseña</h1>
+                        <h1>Recupere la contraseña de tu cuenta</h1>
                     </div>
                     <div class="content">
                         <h2>Hola {user_name or 'Usuario'},</h2>
-                        <p>Has solicitado restablecer tu contraseña. Haz clic en el siguiente botón para crear una nueva contraseña:</p>
+                        <p>Recupere tu contraseña para poder acceder a la cuenta.</p>
+                        <p>Haga clic en el botón de abajo para comenzar.</p>
                         
                         <div style="text-align: center;">
-                            <a href="{reset_url}" class="button">Restablecer Contraseña</a>
+                            <a href="{reset_url}" class="button">Reestablecer Contraseña</a>
                         </div>
                         
                         <p>Si el botón no funciona, copia y pega este enlace en tu navegador:</p>
                         <p><a href="{reset_url}">{reset_url}</a></p>
                         
                         <p><strong>Este enlace expirará en 1 hora.</strong></p>
-                        
-                        <p>Si no solicitaste este cambio, puedes ignorar este mensaje.</p>
                     </div>
                     <div class="footer">
-                        <p>© 2024 Shift Scheduler. Todos los derechos reservados.</p>
+                        <p>2025 © Todos los derechos reservados. Desarrollado por: Casi Tech - Grupo 9 AyD</p>
                     </div>
                 </div>
             </body>
             </html>
             """
             
-            # Contenido plano para clientes de email que no soportan HTML
             plain_content = f"""
+            Recupere la contraseña de tu cuenta
+
             Hola {user_name or 'Usuario'},
-            
-            Has solicitado restablecer tu contraseña. 
-            
-            Usa el siguiente enlace para crear una nueva contraseña:
+
+            Recupere tu contraseña para poder acceder a la cuenta.
+            Haga clic en el enlace para comenzar:
+
             {reset_url}
-            
+
             Este enlace expirará en 1 hora.
-            
-            Si no solicitaste este cambio, puedes ignorar este mensaje.
-            
-            Saludos,
-            Equipo Shift Scheduler
+
+            2025 © Todos los derechos reservados. Desarrollado por: Casi Tech - Grupo 9 AyD
             """
             
             message = Mail(
@@ -100,7 +103,7 @@ class EmailService:
         Envía email confirmando que la contraseña fue actualizada
         """
         try:
-            # Plantilla HTML para contraseña actualizada
+            # Usar la plantilla que proporcionaste
             html_content = f"""
             <!DOCTYPE html>
             <html>
@@ -112,39 +115,36 @@ class EmailService:
                     .header {{ background: #28a745; color: white; padding: 20px; text-align: center; }}
                     .content {{ padding: 20px; background: #f9f9f9; }}
                     .footer {{ padding: 20px; text-align: center; font-size: 12px; color: #666; }}
-                    .success-icon {{ font-size: 48px; color: #28a745; margin: 20px 0; }}
                 </style>
             </head>
             <body>
                 <div class="container">
                     <div class="header">
-                        <h1>Contraseña Actualizada</h1>
+                        <h1>Tu contraseña ha sido actualizada</h1>
                     </div>
-                    <div class="content" style="text-align: center;">
-                        <div class="success-icon">✓</div>
-                        <h2>¡Contraseña actualizada exitosamente!</h2>
+                    <div class="content">
                         <p>Hola {user_name or 'Usuario'},</p>
-                        <p>Tu contraseña ha sido actualizada correctamente.</p>
-                        <p>Si no realizaste este cambio, por favor contacta inmediatamente al soporte.</p>
+                        <p>Queremos informarte que tu contraseña ha sido actualizada correctamente.</p>
+                        <p>Si no realizaste este cambio, te recomendamos cambiarla nuevamente o contactar con soporte de inmediato.</p>
                     </div>
                     <div class="footer">
-                        <p>© 2024 Shift Scheduler. Todos los derechos reservados.</p>
+                        <p>2025 © Todos los derechos reservados. Desarrollado por: Casi Tech - Grupo 9 AyD</p>
                     </div>
                 </div>
             </body>
             </html>
             """
             
-            # Contenido plano
             plain_content = f"""
+            Tu contraseña ha sido actualizada
+
             Hola {user_name or 'Usuario'},
-            
-            Tu contraseña ha sido actualizada exitosamente.
-            
-            Si no realizaste este cambio, por favor contacta inmediatamente al soporte.
-            
-            Saludos,
-            Equipo Shift Scheduler
+
+            Queremos informarte que tu contraseña ha sido actualizada correctamente.
+
+            Si no realizaste este cambio, te recomendamos cambiarla nuevamente o contactar con soporte de inmediato.
+
+            2025 © Todos los derechos reservados. Desarrollado por: Casi Tech - Grupo 9 AyD
             """
             
             message = Mail(
