@@ -1,5 +1,5 @@
 from django.db import models
-from django.contrib.auth.models import User
+from django.conf import settings
 from django.core.exceptions import ValidationError
 
 class ShiftType(models.Model):
@@ -20,7 +20,8 @@ class ShiftType(models.Model):
         verbose_name_plural = "Tipos de Turno"
 
 class Employee(models.Model):
-    user = models.OneToOneField(User, on_delete=models.CASCADE)
+    # Enlazar al modelo de usuario configurado en settings.AUTH_USER_MODEL
+    user = models.OneToOneField(settings.AUTH_USER_MODEL, on_delete=models.CASCADE)
     position = models.CharField(max_length=100)
     is_active = models.BooleanField(default=True)
     

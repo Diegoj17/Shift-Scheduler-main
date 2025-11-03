@@ -2,6 +2,8 @@ from pathlib import Path
 import os
 import dj_database_url
 from datetime import timedelta
+# Import defaults para CORS
+from corsheaders.defaults import default_headers, default_methods
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -129,6 +131,21 @@ CORS_ALLOWED_ORIGINS = [
 ]
 
 CORS_ALLOW_CREDENTIALS = True
+
+# Cabeceras y métodos explícitos para asegurar que la preflight request
+# reciba Access-Control-Allow-Headers y Access-Control-Allow-Methods.
+CORS_ALLOW_HEADERS = list(default_headers) + [
+    'Authorization',
+    'Content-Type',
+]
+
+CORS_ALLOW_METHODS = list(default_methods)
+
+# Regex de orígenes adicionales (útil en producción y para subdominios dinámicos)
+CORS_ALLOWED_ORIGIN_REGEXES = [
+    r"^http://localhost(:[0-9]+)?$",
+    r"^https?://.*\.railway\.app$",
+]
 
 if DEBUG:
     CORS_ALLOW_ALL_ORIGINS = True
