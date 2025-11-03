@@ -179,10 +179,20 @@ contraseña.
                 plain_text_content=plain_content
             )
             
-            # Headers adicionales para mejorar deliverability
-            message.add_header("Reply-To", self.from_email)
-            message.add_header("X-Priority", "3")
-            message.add_header("Importance", "Normal")
+            # Preferir propiedades compatibles con sendgrid Mail
+            # `reply_to` es soportado por la clase Mail; para headers adicionales
+            # asignamos el dict `headers` que sendgrid acepta.
+            try:
+                message.reply_to = From(self.from_email)
+            except Exception:
+                # fallback: algunos wrappers esperan Email-like obj o str
+                message.reply_to = self.from_email
+
+            # Cabeceras adicionales (no usar add_header que es de EmailMessage)
+            message.headers = {
+                "X-Priority": "3",
+                "Importance": "Normal",
+            }
             
             # Enviar
             response = self.sg.send(message)
@@ -324,10 +334,14 @@ Este es un correo informativo sobre la seguridad de tu cuenta.
                 plain_text_content=plain_content
             )
             
-            # Headers adicionales
-            message.add_header("Reply-To", self.from_email)
-            message.add_header("X-Priority", "3")
-            message.add_header("Importance", "Normal")
+            try:
+                message.reply_to = From(self.from_email)
+            except Exception:
+                message.reply_to = self.from_email
+            message.headers = {
+                "X-Priority": "3",
+                "Importance": "Normal",
+            }
             
             response = self.sg.send(message)
             
