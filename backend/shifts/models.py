@@ -16,6 +16,7 @@ class ShiftType(models.Model):
         return self.name
 
     class Meta:
+        db_table = 'shifts_shifttype'
         verbose_name = "Tipo de Turno"
         verbose_name_plural = "Tipos de Turno"
 
