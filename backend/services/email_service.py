@@ -1,7 +1,7 @@
 import os
 import logging
 from sendgrid import SendGridAPIClient
-from sendgrid.helpers.mail import Mail, To, From, ReplyTo
+from sendgrid.helpers.mail import Mail, To, From, ReplyTo, Header
 import secrets
 
 logger = logging.getLogger(__name__)
@@ -170,7 +170,7 @@ Este correo fue enviado a {to_email} porque solicitaste restablecer tu
 contraseña.
             """
             
-            # CORRECCIÓN: Crear el mensaje sin el parámetro reply_to en el constructor
+            # CORRECCIÓN: Crear el mensaje sin headers problemáticos
             message = Mail(
                 from_email=From(self.from_email, "Shift Scheduler"),
                 to_emails=To(to_email),
@@ -179,12 +179,13 @@ contraseña.
                 plain_text_content=plain_content
             )
             
-            # CORRECCIÓN: Agregar reply_to después de crear el objeto
+            # CORRECCIÓN: Agregar reply_to correctamente
             message.reply_to = ReplyTo(self.from_email, "Shift Scheduler")
             
-            # CORRECCIÓN: Agregar headers correctamente
-            message.add_header("X-Priority", "3")
-            message.add_header("Importance", "Normal")
+            # CORRECCIÓN: Eliminar headers problemáticos que pueden causar spam
+            # En su lugar, usar categorías de SendGrid
+            message.add_category("password_reset")
+            message.add_category("transactional")
             
             # Enviar
             response = self.sg.send(message)
@@ -327,12 +328,12 @@ Este es un correo informativo sobre la seguridad de tu cuenta.
                 plain_text_content=plain_content
             )
             
-            # CORRECCIÓN: Agregar reply_to después de crear el objeto
+            # CORRECCIÓN: Agregar reply_to correctamente
             message.reply_to = ReplyTo(self.from_email, "Shift Scheduler")
             
-            # CORRECCIÓN: Agregar headers correctamente
-            message.add_header("X-Priority", "3")
-            message.add_header("Importance", "Normal")
+            # CORRECCIÓN: Usar categorías en lugar de headers
+            message.add_category("password_updated")
+            message.add_category("transactional")
             
             response = self.sg.send(message)
             
