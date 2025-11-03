@@ -13,10 +13,19 @@ from rest_framework import status, permissions, generics, serializers
 from rest_framework.response import Response
 from rest_framework.views import APIView
 from rest_framework_simplejwt.tokens import RefreshToken
-from .serializers import LoginSerializer, RegisterSerializer, UserPublicSerializer, AdminCreateUserSerializer,AdminUpdateUserSerializer, AssignRolePermsSerializer
-from . import serializers as user_serializers
+from .serializers import (
+    LoginSerializer, 
+    RegisterSerializer, 
+    UserPublicSerializer, 
+    AdminCreateUserSerializer,
+    AdminUpdateUserSerializer, 
+    AssignRolePermsSerializer,
+    PasswordResetRequestSerializer,
+    PasswordResetConfirmSerializer
+)
 from services.email_service import get_email_service, generate_reset_token
 from django.views.decorators.csrf import ensure_csrf_cookie
+from django.utils.decorators import method_decorator
 from django.http import JsonResponse
 
 
@@ -33,7 +42,8 @@ class RegisterView(APIView):
                 status=status.HTTP_201_CREATED,
             )
         return Response(ser.errors, status=status.HTTP_400_BAD_REQUEST)
-    
+
+
 class LoginView(APIView):
     authentication_classes = []     # público
     permission_classes = []         # público
@@ -48,11 +58,18 @@ class LoginView(APIView):
 
         user = ser.validated_data["user"]
         refresh = RefreshToken.for_user(user)
-        return Response({
+        
+        response = Response({
             "access": str(refresh.access_token),
             "refresh": str(refresh),
             "user": UserPublicSerializer(user).data
         }, status=status.HTTP_200_OK)
+        
+        # Asegurar headers CORS en la respuesta
+        response["Access-Control-Allow-Origin"] = request.headers.get('Origin', '*')
+        response["Access-Control-Allow-Credentials"] = "true"
+        
+        return response
 
 
 class MeView(APIView):
@@ -60,12 +77,7 @@ class MeView(APIView):
 
     def get(self, request):
         return Response({"user": UserPublicSerializer(request.user).data})
-    
-from .serializers import (
-    PasswordResetRequestSerializer,
-    PasswordResetConfirmSerializer,
-    UserPublicSerializer,
-)
+
 
 token_generator = PasswordResetTokenGenerator()
 
@@ -108,7 +120,14 @@ class PasswordResetView(APIView):
             # Catch unexpected errors during lookup/generation and log them; still return generic response.
             logging.getLogger('users').exception(f"Unexpected error during password reset request for {email}: {e}")
 
-        return Response({"message": "Si el email existe, recibirás instrucciones"}, status=200)
+        response = Response({"message": "Si el email existe, recibirás instrucciones"}, status=200)
+        response["Access-Control-Allow-Origin"] = request.headers.get('Origin', '*')
+        return response
+
+# Compatibilidad hacia atrás: algunas partes del código (urls.py) importaban
+# `PasswordResetRequestView`. Mantener el nombre antiguo como alias para evitar
+# ImportError durante despliegues que esperan la vista con ese identificador.
+PasswordResetRequestView = PasswordResetView
 
 
 class PasswordResetConfirmView(APIView):
@@ -174,7 +193,10 @@ class PasswordResetConfirmView(APIView):
 
         threading.Thread(target=_send_confirmation_email, daemon=True).start()
 
-        return Response({"message": "Contraseña actualizada correctamente."}, status=200)
+        response = Response({"message": "Contraseña actualizada correctamente."}, status=200)
+        response["Access-Control-Allow-Origin"] = request.headers.get('Origin', '*')
+        return response
+
 
 class AdminCreateUserView(generics.CreateAPIView):
     queryset = User.objects.all()
@@ -209,6 +231,7 @@ class AdminCreateUserView(generics.CreateAPIView):
             status=status.HTTP_201_CREATED
         )
 
+
 class AdminListNonGerenteUsersView(generics.ListAPIView):
     """
     GET /api/auth/users/ -> Lista todos los usuarios excepto los que tienen role='GERENTE'.
@@ -228,6 +251,7 @@ class AdminListNonGerenteUsersView(generics.ListAPIView):
         except Exception:
             pass
         return qs.order_by("id")
+
 
 class AdminUpdateUserView(generics.UpdateAPIView):
     """
@@ -297,6 +321,7 @@ class AdminUpdateUserView(generics.UpdateAPIView):
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
             )
 
+
 class AdminDeleteUserView(generics.DestroyAPIView):
     queryset = User.objects.all()
     permission_classes = [permissions.IsAuthenticated]
@@ -315,7 +340,8 @@ class AdminDeleteUserView(generics.DestroyAPIView):
 
         self.perform_destroy(instance)
         return Response({"message": "Usuario eliminado con éxito."}, status=200)
-    
+
+
 class AdminUserDetailView(generics.RetrieveUpdateDestroyAPIView):
     """
     GET    /api/auth/users/<id>   -> ver detalle (si lo quieres)
@@ -373,6 +399,7 @@ class AdminUserDetailView(generics.RetrieveUpdateDestroyAPIView):
         self.perform_destroy(instance)
         return Response({"message": "Usuario eliminado con éxito."}, status=200)
 
+
 class AdminBlockUserView(APIView):
     """
     PUT /api/auth/users/<id>/block
@@ -409,6 +436,10 @@ class AdminBlockUserView(APIView):
         # (Opcional) registrar auditoría
         print(f"[AUDITORÍA] {request.user.email} bloqueó al usuario {user.email}")
 
+        response = Response({"message": "Usuario bloqueado con éxito."}, status=200)
+        response["Access-Control-Allow-Origin"] = request.headers.get('Origin', '*')
+        return response
+
 
 User = get_user_model()
 
@@ -432,12 +463,15 @@ class AdminUserAccessView(APIView):
         user = self.get_object(pk)
         if not user or getattr(user, 'role', None) == "GERENTE":
             return Response({"detail": "Usuario no encontrado."}, status=404)
-        return Response({
+        
+        response = Response({
             "id": user.id,
             "email": user.email,
             "role": user.role,
             "permissions": user.permissions or []
         }, status=200)
+        response["Access-Control-Allow-Origin"] = request.headers.get('Origin', '*')
+        return response
 
     def put(self, request, pk):
         if request.user.role not in ["ADMIN", "GERENTE"]:
@@ -450,7 +484,7 @@ class AdminUserAccessView(APIView):
         ser.is_valid(raise_exception=True)
         ser.update(user, ser.validated_data)
 
-        return Response({
+        response = Response({
             "message": "Acceso actualizado con éxito.",
             "user": {
                 "id": user.id,
@@ -459,7 +493,30 @@ class AdminUserAccessView(APIView):
                 "permissions": user.permissions or []
             }
         }, status=200)
+        response["Access-Control-Allow-Origin"] = request.headers.get('Origin', '*')
+        return response
 
+
+# Vista CSRF mejorada
 @ensure_csrf_cookie
 def csrf(request):
-    return JsonResponse({"detail": "CSRF cookie set"})
+    response = JsonResponse({"detail": "CSRF cookie set"})
+    # Headers CORS explícitos
+    response["Access-Control-Allow-Origin"] = request.headers.get('Origin', 'http://localhost:4000')
+    response["Access-Control-Allow-Credentials"] = "true"
+    response["Access-Control-Allow-Headers"] = "Content-Type, Authorization, X-CSRFToken"
+    response["Access-Control-Allow-Methods"] = "GET, POST, OPTIONS"
+    return response
+
+
+# Vista adicional para manejar preflight OPTIONS requests
+def cors_preflight(request):
+    """
+    Maneja requests OPTIONS para CORS preflight
+    """
+    response = JsonResponse({"detail": "Preflight OK"})
+    response["Access-Control-Allow-Origin"] = request.headers.get('Origin', 'http://localhost:4000')
+    response["Access-Control-Allow-Credentials"] = "true"
+    response["Access-Control-Allow-Headers"] = "Content-Type, Authorization, X-CSRFToken"
+    response["Access-Control-Allow-Methods"] = "GET, POST, PUT, PATCH, DELETE, OPTIONS"
+    return response
