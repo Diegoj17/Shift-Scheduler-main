@@ -1,7 +1,7 @@
 import os
 import logging
 from sendgrid import SendGridAPIClient
-from sendgrid.helpers.mail import Mail, To, From
+from sendgrid.helpers.mail import Mail, To, From, ReplyTo
 import secrets
 
 logger = logging.getLogger(__name__)
@@ -170,21 +170,21 @@ Este correo fue enviado a {to_email} porque solicitaste restablecer tu
 contraseña.
             """
             
-            # Crear el mensaje con headers y reply_to usando los argumentos
-            # del constructor de SendGrid Mail (evita asignar propiedades
-            # que no tienen setter en la implementación).
+            # CORRECCIÓN: Crear el mensaje sin el parámetro reply_to en el constructor
             message = Mail(
                 from_email=From(self.from_email, "Shift Scheduler"),
                 to_emails=To(to_email),
                 subject="Restablecimiento de contraseña - Shift Scheduler",
                 html_content=html_content,
-                plain_text_content=plain_content,
-                reply_to=From(self.from_email),
-                headers={
-                    "X-Priority": "3",
-                    "Importance": "Normal",
-                }
+                plain_text_content=plain_content
             )
+            
+            # CORRECCIÓN: Agregar reply_to después de crear el objeto
+            message.reply_to = ReplyTo(self.from_email, "Shift Scheduler")
+            
+            # CORRECCIÓN: Agregar headers correctamente
+            message.add_header("X-Priority", "3")
+            message.add_header("Importance", "Normal")
             
             # Enviar
             response = self.sg.send(message)
@@ -318,18 +318,21 @@ Desarrollado por Casi Tech - Grupo 9 AyD
 Este es un correo informativo sobre la seguridad de tu cuenta.
             """
             
+            # CORRECCIÓN: Mismo patrón para el segundo método
             message = Mail(
                 from_email=From(self.from_email, "Shift Scheduler"),
                 to_emails=To(to_email),
                 subject="Contraseña actualizada - Shift Scheduler",
                 html_content=html_content,
-                plain_text_content=plain_content,
-                reply_to=From(self.from_email),
-                headers={
-                    "X-Priority": "3",
-                    "Importance": "Normal",
-                }
+                plain_text_content=plain_content
             )
+            
+            # CORRECCIÓN: Agregar reply_to después de crear el objeto
+            message.reply_to = ReplyTo(self.from_email, "Shift Scheduler")
+            
+            # CORRECCIÓN: Agregar headers correctamente
+            message.add_header("X-Priority", "3")
+            message.add_header("Importance", "Normal")
             
             response = self.sg.send(message)
             
@@ -353,11 +356,6 @@ def get_email_service():
         email_service = EmailService()
     return email_service
 
-
 def generate_reset_token(length: int = 32) -> str:
-    """Genera un token seguro apto para usar en enlaces de restablecimiento.
-
-    Usa secrets.token_urlsafe para producir una cadena URL-safe. El parámetro
-    length controla la entropía aproximada (por defecto 32 bytes).
-    """
+    """Genera un token seguro apto para usar en enlaces de restablecimiento."""
     return secrets.token_urlsafe(length)
