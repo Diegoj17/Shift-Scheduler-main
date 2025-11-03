@@ -2,11 +2,9 @@ from pathlib import Path
 import os
 import dj_database_url
 from datetime import timedelta
+from dotenv import load_dotenv
 
-# Solo cargar .env en desarrollo local, NO en Railway
-if os.getenv('RAILWAY_ENVIRONMENT') is None:
-    from dotenv import load_dotenv
-    load_dotenv()
+load_dotenv()
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 
@@ -117,9 +115,6 @@ SIMPLE_JWT = {
     'ROTATE_REFRESH_TOKENS': True,
 }
 
-
-
-
 CSRF_TRUSTED_ORIGINS = [
     "http://localhost:4000",
     "http://localhost:5173",
@@ -143,24 +138,56 @@ if not DEBUG:
     CSRF_COOKIE_SECURE = True
     SESSION_COOKIE_SECURE = True
 
-
-DEBUG = os.getenv("DEBUG", "False") == "True"
+# ✅ CONFIGURACIÓN SEGURA DE SENDGRID - SIN CLAVES EXPUESTAS
+SENDGRID_API_KEY = os.getenv("SENDGRID_API_KEY")  # Solo variable de entorno
 
 EMAIL_BACKEND = "django.core.mail.backends.smtp.EmailBackend"
-EMAIL_HOST = os.getenv("EMAIL_HOST", "smtp.sendgrid.net")
-EMAIL_PORT = int(os.getenv("EMAIL_PORT", "587"))
-EMAIL_USE_TLS = os.getenv("EMAIL_USE_TLS", "True") == "True"
-EMAIL_TIMEOUT = int(os.getenv("EMAIL_TIMEOUT", "20"))
+EMAIL_HOST = "smtp.sendgrid.net"
+EMAIL_PORT = 587
+EMAIL_USE_TLS = True
+EMAIL_TIMEOUT = 30
 
-EMAIL_HOST_USER = os.getenv("EMAIL_HOST_USER", "apikey")
-EMAIL_HOST_PASSWORD = os.getenv("EMAIL_HOST_PASSWORD", "")
+# Para SendGrid, el USERNAME siempre es 'apikey' y el PASSWORD es tu API Key
+EMAIL_HOST_USER = "apikey"
+EMAIL_HOST_PASSWORD = SENDGRID_API_KEY  # Usa la misma variable
 
 DEFAULT_FROM_EMAIL = os.getenv(
     "DEFAULT_FROM_EMAIL",
-    "Shift Scheduler <soporteshiftscheduler@gmail.com>"
+    "soporteshiftscheduler1@gmail.com"  # Fallback seguro
 )
 
 PASSWORD_RESET_CONFIRM_FRONTEND_URL = os.getenv(
     "PASSWORD_RESET_CONFIRM_FRONTEND_URL",
-    "https://shift-scheduler-main-production.up.railway.app/api/auth/password/reset/"
+    "https://shiftscheduler1.vercel.app/reset-password/confirm"  # Ruta de tu frontend
 )
+
+# Configuración adicional para el sistema de recuperación de contraseña
+PASSWORD_RESET_TIMEOUT = 86400  # 24 horas en segundos
+
+# Logging para depuración de emails
+LOGGING = {
+    'version': 1,
+    'disable_existing_loggers': False,
+    'handlers': {
+        'console': {
+            'class': 'logging.StreamHandler',
+        },
+    },
+    'loggers': {
+        'django': {
+            'handlers': ['console'],
+            'level': 'INFO',
+        },
+        'users': {
+            'handlers': ['console'],
+            'level': 'DEBUG' if DEBUG else 'INFO',
+            'propagate': False,
+        },
+        'django.core.mail': {
+            'handlers': ['console'],
+            'level': 'DEBUG' if DEBUG else 'INFO',
+            'propagate': False,
+        },
+    },
+}
+>>>>>>> a21e840 (Cambios)
