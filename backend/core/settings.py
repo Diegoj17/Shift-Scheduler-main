@@ -173,6 +173,8 @@ DEFAULT_FROM_EMAIL = os.getenv(
     "soporteshiftscheduler1@gmail.com"  # Fallback seguro
 )
 
+FRONTEND_URL = os.getenv("FRONTEND_URL", "https://shiftscheduler1.vercel.app")
+
 PASSWORD_RESET_CONFIRM_FRONTEND_URL = os.getenv(
     "PASSWORD_RESET_CONFIRM_FRONTEND_URL",
     "https://shiftscheduler1.vercel.app/reset-password/confirm"  # Ruta de tu frontend
