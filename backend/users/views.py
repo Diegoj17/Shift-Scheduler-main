@@ -87,11 +87,21 @@ class PasswordResetRequestView(APIView):
         token = token_generator.make_token(user)
 
         # arma enlace para el front si existe, si no, backend
-        front_url = getattr(settings, "PASSWORD_RESET_CONFIRM_FRONTEND_URL", "")
+        front_url = getattr(settings, "PASSWORD_RESET_CONFIRM_FRONTEND_URL", None)
+        # Si front_url contiene placeholders, permitimos formatos como
+        # https://app.example.com/reset-password/confirm?uid={uid}&token={token}
         if front_url:
-            link = f"{front_url}?uid={uidb64}&token={token}"
+            try:
+                if "{uid}" in front_url or "{token}" in front_url:
+                    link = front_url.format(uid=uidb64, token=token)
+                else:
+                    # asegurarnos de no duplicar barras
+                    link = f"{front_url.rstrip('/')}/reset-password/confirm?uid={uidb64}&token={token}"
+            except Exception:
+                link = f"{front_url.rstrip('/')}/reset-password/confirm?uid={uidb64}&token={token}"
         else:
-            link = request.build_absolute_uri(f"/api/auth/password/reset/confirm?uid={uidb64}&token={token}")
+            # Por defecto apuntamos a la ruta frontend en el mismo host: /reset-password/confirm
+            link = request.build_absolute_uri(f"/reset-password/confirm?uid={uidb64}&token={token}")
 
         subject = "Restablecer contraseña – Shift Scheduler"
         message = (
@@ -101,9 +111,9 @@ class PasswordResetRequestView(APIView):
         )
         send_mail(subject, message, settings.DEFAULT_FROM_EMAIL, [user.email], fail_silently=False)
 
-        # En desarrollo puedes (opcional) devolver los datos para facilitar test QA:
+        # En desarrollo puedes (opcional) devolver los datos para facilitar test QA, incluimos el link.
         if settings.DEBUG:
-            return Response({"message": "Correo de restablecimiento enviado.", "uid": uidb64, "token": token},
+            return Response({"message": "Correo de restablecimiento enviado.", "uid": uidb64, "token": token, "link": link},
                             status=200)
         return Response({"message": "Correo de restablecimiento enviado."}, status=200)
 
@@ -113,7 +123,14 @@ class PasswordResetConfirmView(APIView):
     permission_classes = []
 
     def post(self, request):
-        ser = PasswordResetConfirmSerializer(data=request.data)
+        # aceptar uid/token tanto en body como en query params (útil para flujo frontend)
+        data = request.data.copy() if hasattr(request, 'data') else {}
+        if 'uid' not in data and 'uid' in request.query_params:
+            data['uid'] = request.query_params.get('uid')
+        if 'token' not in data and 'token' in request.query_params:
+            data['token'] = request.query_params.get('token')
+
+        ser = PasswordResetConfirmSerializer(data=data)
         if not ser.is_valid():
             return Response(ser.errors, status=status.HTTP_400_BAD_REQUEST)
 
@@ -148,7 +165,9 @@ class AdminCreateUserView(generics.CreateAPIView):
                     "telefono": user.telefono,
                     "email": user.email,
                     "role": user.role,
-                    "status": user.status
+                    "status": user.status,
+                    "departamento": user.departamento,
+                    "puesto": user.puesto,
                 }
             },
             status=status.HTTP_201_CREATED
@@ -225,6 +244,8 @@ class AdminUpdateUserView(generics.UpdateAPIView):
                         "email": user.email,
                         "role": user.role,
                         "status": user.status,
+                        "departamento": getattr(user, 'departamento', None),
+                        "puesto": getattr(user, 'puesto', None),
                     },
                 },
                 status=status.HTTP_200_OK,
@@ -297,6 +318,8 @@ class AdminUserDetailView(generics.RetrieveUpdateDestroyAPIView):
                 "email": user.email,
                 "role": user.role,
                 "status": user.status,
+                "departamento": getattr(user, 'departamento', None),
+                "puesto": getattr(user, 'puesto', None),
             }
         }, status=200)
 
