@@ -46,7 +46,7 @@ class RegisterSerializer(serializers.ModelSerializer):
 class UserPublicSerializer(serializers.ModelSerializer):
     class Meta:
         model = User
-        fields = ("id", "first_name", "last_name", "telefono", "email", "role", "status")
+        fields = ("id", "first_name", "last_name", "telefono", "email", "role", "status", "departamento", "puesto")
 
 
 class LoginSerializer(serializers.Serializer):
@@ -147,7 +147,7 @@ class AdminCreateUserSerializer(serializers.ModelSerializer):
         fields = (
             "id", "first_name", "last_name", "telefono",
             "email", "password", "password_confirm",
-            "role", "status"
+            "role", "status", "departamento", "puesto"
         )
 
     def validate(self, data):
@@ -155,6 +155,9 @@ class AdminCreateUserSerializer(serializers.ModelSerializer):
             raise serializers.ValidationError({"password_confirm": "Las contraseñas no coinciden."})
         if User.objects.filter(email__iexact=data["email"]).exists():
             raise serializers.ValidationError({"email": "El correo ya está registrado."})
+        # Cuando un administrador/gerente crea un usuario, debe proporcionar departamento y puesto
+        if not data.get("departamento") or not data.get("puesto"):
+            raise serializers.ValidationError({"detalle": "departamento y puesto son obligatorios para la creación por administrador."})
         return data
 
     def create(self, validated_data):
@@ -174,7 +177,7 @@ class AdminUpdateUserSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = User
-        fields = ("id", "first_name", "last_name", "telefono", "email", "role", "status")
+        fields = ("id", "first_name", "last_name", "telefono", "email", "role", "status", "departamento", "puesto")
         read_only_fields = ("id",)
         extra_kwargs = {
             'first_name': {'required': False},
