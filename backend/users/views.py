@@ -1,4 +1,5 @@
 import time
+import threading
 from .models import User
 from django.conf import settings
 from django.core.cache import cache
@@ -13,8 +14,8 @@ from rest_framework.views import APIView
 from rest_framework_simplejwt.tokens import RefreshToken
 from .serializers import LoginSerializer, RegisterSerializer, UserPublicSerializer, AdminCreateUserSerializer,AdminUpdateUserSerializer, AssignRolePermsSerializer
 from . import serializers as user_serializers
-from django.views.decorators.csrf import ensure_csrf_cookie
-from django.http import JsonResponse
+from services import email_service
+
 
 class RegisterView(APIView):
     authentication_classes = []
@@ -69,17 +70,16 @@ class PasswordResetRequestView(APIView):
     authentication_classes = []
     permission_classes = []
 
-    RATE_LIMIT_SECONDS = 3600  # 1 solicitud por hora
+    RATE_LIMIT_SECONDS = 300  # 5 minutos
 
     def post(self, request):
-        import threading  # para envío asíncrono
-
         ser = PasswordResetRequestSerializer(data=request.data)
         if not ser.is_valid():
             return Response(ser.errors, status=status.HTTP_400_BAD_REQUEST)
 
         user = ser.context["user"]
-        # rate limit por email
+        
+        # Rate limit por email
         key = f"pwdreset:{user.email.lower()}"
         if cache.get(key):
             return Response(
@@ -88,58 +88,29 @@ class PasswordResetRequestView(APIView):
             )
         cache.set(key, True, self.RATE_LIMIT_SECONDS)
 
+        # Generar token
         uidb64 = urlsafe_base64_encode(smart_bytes(user.pk))
         token = token_generator.make_token(user)
 
-        # Armar enlace para el frontend o backend
-        front_url = getattr(settings, "PASSWORD_RESET_CONFIRM_FRONTEND_URL", "")
-        if front_url:
-            try:
-                if "{uid}" in front_url or "{token}" in front_url:
-                    link = front_url.format(uid=uidb64, token=token)
-                else:
-                    # asegurarnos de no duplicar barras
-                    link = f"{front_url.rstrip('/')}/reset-password/confirm?uid={uidb64}&token={token}"
-            except Exception:
-                link = f"{front_url.rstrip('/')}/reset-password/confirm?uid={uidb64}&token={token}"
-        else:
-            # Por defecto apuntamos a la ruta frontend en el mismo host: /reset-password/confirm
-            link = request.build_absolute_uri(f"/reset-password/confirm?uid={uidb64}&token={token}")
-
-        subject = "Restablecer contraseña – Shift Scheduler"
-        message = (
-            f"Hola {user.first_name or user.email},\n\n"
-            f"Solicitaste restablecer tu contraseña. Haz clic en el enlace (expira en 24 horas):\n\n{link}\n\n"
-            "Si no fuiste tú, ignora este mensaje."
-        )
-
-        # En desarrollo puedes (opcional) devolver los datos para facilitar test QA, incluimos el link.
-        if settings.DEBUG:
-            return Response({"message": "Correo de restablecimiento enviado.", "uid": uidb64, "token": token, "link": link},
-                            status=200)
-        return Response({"message": "Correo de restablecimiento enviado."}, status=200)
-        # --- ✅ Envío de correo ASÍNCRONO (para evitar 502/timeout) ---
+        # Envío ASÍNCRONO con nuestro nuevo servicio
         def _send_email_async():
             try:
-                send_mail(
-                    subject,
-                    message,
-                    settings.DEFAULT_FROM_EMAIL,
-                    [user.email],
-                    fail_silently=True,  # no detiene la API si el SMTP falla
+                success = email_service.send_password_reset_email(
+                    to_email=user.email,
+                    reset_token=token,  # Enviamos el token directamente
+                    user_name=user.first_name or user.email.split('@')[0]
                 )
+                if success:
+                    print(f"✅ Email de recuperación enviado a {user.email}")
+                else:
+                    print(f"❌ Error enviando email a {user.email}")
             except Exception as e:
-                print(f"[WARN] Error enviando email reset: {e}")
+                print(f"❌ Error en envío asíncrono: {e}")
 
+        # Ejecutar en segundo plano
         threading.Thread(target=_send_email_async, daemon=True).start()
-        # ---------------------------------------------------------------
 
-        # En desarrollo puedes devolver uid/token para probar
-        if settings.DEBUG:
-            return Response(
-                {"message": "Correo de restablecimiento enviado.", "uid": uidb64, "token": token},
-                status=200
-            )
+        # Respuesta inmediata
         return Response(
             {"message": "Si el correo existe, se ha enviado un enlace de recuperación."},
             status=200
@@ -151,8 +122,7 @@ class PasswordResetConfirmView(APIView):
     permission_classes = []
 
     def post(self, request):
-        # aceptar uid/token tanto en body como en query params (útil para flujo frontend)
-        data = request.data.copy() if hasattr(request, 'data') else {}
+        data = request.data.copy()
         if 'uid' not in data and 'uid' in request.query_params:
             data['uid'] = request.query_params.get('uid')
         if 'token' not in data and 'token' in request.query_params:
@@ -166,6 +136,23 @@ class PasswordResetConfirmView(APIView):
         new_pw = ser.validated_data["new_password"]
         user.set_password(new_pw)
         user.save()
+
+        # Envío ASÍNCRONO de confirmación
+        def _send_confirmation_email():
+            try:
+                success = email_service.send_password_updated_email(
+                    to_email=user.email,
+                    user_name=user.first_name or user.email.split('@')[0]
+                )
+                if success:
+                    print(f"✅ Email de confirmación enviado a {user.email}")
+                else:
+                    print(f"❌ Error enviando email de confirmación a {user.email}")
+            except Exception as e:
+                print(f"❌ Error en envío asíncrono de confirmación: {e}")
+
+        threading.Thread(target=_send_confirmation_email, daemon=True).start()
+
         return Response({"message": "Contraseña actualizada correctamente."}, status=200)
 
 class AdminCreateUserView(generics.CreateAPIView):
@@ -400,15 +387,6 @@ class AdminBlockUserView(APIView):
 
         # (Opcional) registrar auditoría
         print(f"[AUDITORÍA] {request.user.email} bloqueó al usuario {user.email}")
-
-
-# Endpoint ligero para forzar que Django establezca la cookie CSRF en el cliente.
-# Útil para SPAs que necesitan que el navegador tenga 'csrftoken' antes de realizar POST
-# con autenticación por sesión. El decorador ensure_csrf_cookie añade la cookie.
-@ensure_csrf_cookie
-def csrf(request):
-    return JsonResponse({"detail": "CSRF cookie set"})
-
 
 
 User = get_user_model()
