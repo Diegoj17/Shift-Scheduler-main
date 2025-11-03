@@ -24,7 +24,7 @@ class EmailService:
         OPTIMIZADO PARA EVITAR SPAM
         """
         try:
-            reset_url = f"{self.frontend_url}/reset-password/config.html?token={reset_token}"
+            reset_url = f"{self.frontend_url}/reset-password/confirm?token={reset_token}"
             
             # HTML optimizado para deliverability
             html_content = f"""
@@ -170,29 +170,21 @@ Este correo fue enviado a {to_email} porque solicitaste restablecer tu
 contraseña.
             """
             
-            # Crear el mensaje con headers optimizados
+            # Crear el mensaje con headers y reply_to usando los argumentos
+            # del constructor de SendGrid Mail (evita asignar propiedades
+            # que no tienen setter en la implementación).
             message = Mail(
                 from_email=From(self.from_email, "Shift Scheduler"),
                 to_emails=To(to_email),
                 subject="Restablecimiento de contraseña - Shift Scheduler",
                 html_content=html_content,
-                plain_text_content=plain_content
+                plain_text_content=plain_content,
+                reply_to=From(self.from_email),
+                headers={
+                    "X-Priority": "3",
+                    "Importance": "Normal",
+                }
             )
-            
-            # Preferir propiedades compatibles con sendgrid Mail
-            # `reply_to` es soportado por la clase Mail; para headers adicionales
-            # asignamos el dict `headers` que sendgrid acepta.
-            try:
-                message.reply_to = From(self.from_email)
-            except Exception:
-                # fallback: algunos wrappers esperan Email-like obj o str
-                message.reply_to = self.from_email
-
-            # Cabeceras adicionales (no usar add_header que es de EmailMessage)
-            message.headers = {
-                "X-Priority": "3",
-                "Importance": "Normal",
-            }
             
             # Enviar
             response = self.sg.send(message)
@@ -331,17 +323,13 @@ Este es un correo informativo sobre la seguridad de tu cuenta.
                 to_emails=To(to_email),
                 subject="Contraseña actualizada - Shift Scheduler",
                 html_content=html_content,
-                plain_text_content=plain_content
+                plain_text_content=plain_content,
+                reply_to=From(self.from_email),
+                headers={
+                    "X-Priority": "3",
+                    "Importance": "Normal",
+                }
             )
-            
-            try:
-                message.reply_to = From(self.from_email)
-            except Exception:
-                message.reply_to = self.from_email
-            message.headers = {
-                "X-Priority": "3",
-                "Importance": "Normal",
-            }
             
             response = self.sg.send(message)
             
