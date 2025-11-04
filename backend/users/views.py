@@ -151,58 +151,71 @@ class PasswordResetConfirmView(APIView):
     permission_classes = []
 
     def post(self, request):
+        import logging
+        logger = logging.getLogger('users')
+        
+        logger.info(f"🔄 Password reset confirm - Data recibida: {request.data}")
+        
         data = request.data.copy()
+        
+        # Obtener uid y token de query params si no están en body
         if 'uid' not in data and 'uid' in request.query_params:
             data['uid'] = request.query_params.get('uid')
         if 'token' not in data and 'token' in request.query_params:
             data['token'] = request.query_params.get('token')
+        
+        logger.info(f"📝 UID: {data.get('uid')}, Token: {data.get('token')[:10]}..." if data.get('token') else "No token")
 
-        # Soporte para flujo simplificado: si el cliente envía solo 'token' (sin uid),
-        # buscamos en cache el user id asociado y rellenamos uid para que el serializer
-        # existente (que valida uid via urlsafe_base64_decode) funcione.
+        # Soporte para flujo simplificado: si solo hay token, buscar uid en cache
         token = data.get('token')
         if token and not data.get('uid'):
             try:
                 cache_key = f"password_reset:{token}"
                 user_pk = cache.get(cache_key)
                 if user_pk:
-                    # encodear el pk como uidb64 esperado por el serializer
                     data['uid'] = urlsafe_base64_encode(smart_bytes(user_pk))
+                    logger.info(f"✅ UID recuperado de cache: {user_pk}")
                 else:
-                    logging.getLogger('users').warning(f"Password reset token not found in cache: {token}")
+                    logger.warning(f"⚠️ Token no encontrado en cache: {token}")
             except Exception as e:
-                logging.getLogger('users').exception(f"Error checking password reset token in cache: {e}")
+                logger.exception(f"Error recuperando UID de cache: {e}")
 
+        # Validar con serializer
         ser = PasswordResetConfirmSerializer(data=data)
         if not ser.is_valid():
+            logger.error(f"❌ Errores de validación: {ser.errors}")
             return Response(ser.errors, status=status.HTTP_400_BAD_REQUEST)
 
         user = ser.context["user"]
         new_pw = ser.validated_data["new_password"]
+        
+        logger.info(f"✅ Actualizando contraseña para user {user.pk} ({user.email})")
+        
         user.set_password(new_pw)
         user.save()
 
-        # Si vino por nuestro token cacheado, eliminarlo para que no pueda reutilizarse
+        # Limpiar tokens
         try:
             token = data.get('token')
             if token:
-                # Primero intentar eliminar cualquier entrada en cache
+                # Cache
                 try:
                     cache_key = f"password_reset:{token}"
                     cache.delete(cache_key)
+                    logger.info(f"🗑️ Token eliminado de cache")
                 except Exception:
                     pass
 
-                # Marcar como usado en DB si existe
+                # DB
                 try:
                     prt = PasswordResetToken.objects.filter(token=token, used=False).first()
                     if prt:
                         prt.mark_used()
-                        logging.getLogger('users').debug(f"Marked DB password reset token used: {token}")
-                except Exception:
-                    logging.getLogger('users').exception(f"Error marking DB password reset token used: {token}")
-        except Exception:
-            pass
+                        logger.info(f"✅ Token DB marcado como usado")
+                except Exception as e:
+                    logger.exception(f"Error marcando token DB como usado: {e}")
+        except Exception as e:
+            logger.exception(f"Error limpiando tokens: {e}")
 
         # Envío ASÍNCRONO de confirmación
         def _send_confirmation_email():
@@ -213,11 +226,11 @@ class PasswordResetConfirmView(APIView):
                     user_name=user.first_name or user.email.split('@')[0]
                 )
                 if success:
-                    print(f"✅ Email de confirmación enviado a {user.email}")
+                    logger.info(f"✅ Email de confirmación enviado a {user.email}")
                 else:
-                    print(f"❌ Error enviando email de confirmación a {user.email}")
+                    logger.warning(f"❌ Error enviando email de confirmación a {user.email}")
             except Exception as e:
-                print(f"❌ Error en envío asíncrono de confirmación: {e}")
+                logger.exception(f"Error en envío asíncrono de confirmación: {e}")
 
         threading.Thread(target=_send_confirmation_email, daemon=True).start()
 

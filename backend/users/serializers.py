@@ -119,7 +119,13 @@ class PasswordResetConfirmSerializer(serializers.Serializer):
     def validate(self, attrs):
         if attrs["new_password"] != attrs["new_password_confirm"]:
             raise serializers.ValidationError({"new_password_confirm": "Las contraseñas no coinciden."})
-        validate_password(attrs["new_password"])
+        
+        # Validar fortaleza de contraseña
+        try:
+            validate_password(attrs["new_password"])
+        except Exception as e:
+            raise serializers.ValidationError({"new_password": str(e)})
+        
         return attrs
 
     def validate_uid(self, value):
@@ -132,10 +138,61 @@ class PasswordResetConfirmSerializer(serializers.Serializer):
         return value
 
     def validate_token(self, value):
+        """
+        Valida el token - soporta tanto tokens Django como tokens UUID custom
+        """
+        from django.core.cache import cache
+        from .models import PasswordResetToken
+        import logging
+        
+        logger = logging.getLogger('users')
         user = self.context.get("user")
-        if not user or not token_generator.check_token(user, value):
-            raise serializers.ValidationError("Token inválido o expirado.")
-        return value
+        
+        if not user:
+            raise serializers.ValidationError("Usuario no encontrado.")
+        
+        # ✅ PRIORIDAD 1: Intentar validar token custom desde DB
+        try:
+            db_token = PasswordResetToken.objects.filter(
+                user=user,
+                token=value,
+                used=False
+            ).first()
+            
+            if db_token:
+                if db_token.is_expired():
+                    logger.warning(f"Token DB expirado para user {user.pk}")
+                    raise serializers.ValidationError("Token expirado.")
+                
+                logger.info(f"✅ Token DB válido para user {user.pk}")
+                return value
+        except serializers.ValidationError:
+            raise
+        except Exception as e:
+            logger.warning(f"Error checking DB token: {e}")
+        
+        # ✅ PRIORIDAD 2: Intentar validar token custom desde cache
+        try:
+            cache_key = f"password_reset:{value}"
+            cached_user_pk = cache.get(cache_key)
+            
+            if cached_user_pk and str(cached_user_pk) == str(user.pk):
+                logger.info(f"✅ Token cache válido para user {user.pk}")
+                return value
+        except Exception as e:
+            logger.warning(f"Error checking cache token: {e}")
+        
+        # ✅ PRIORIDAD 3: Intentar validar con Django default token generator (fallback)
+        try:
+            if token_generator.check_token(user, value):
+                logger.info(f"✅ Token Django válido para user {user.pk}")
+                return value
+        except Exception as e:
+            logger.warning(f"Error checking Django token: {e}")
+        
+        # ❌ Ninguna validación funcionó
+        logger.error(f"❌ Token inválido para user {user.pk}")
+        raise serializers.ValidationError("Token inválido o expirado.")
 
 
 class AdminCreateUserSerializer(serializers.ModelSerializer):
