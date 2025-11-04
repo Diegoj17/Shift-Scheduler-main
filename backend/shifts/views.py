@@ -298,19 +298,48 @@ class ShiftListAPIView(APIView):
             for row in rows:
                 pk, start_dt, end_dt, shift_type, role_in_shift, employee_id = row
                 employee_name = None
+
+                # Obtener nombre del empleado tratando ambos casos posibles:
+                # 1) `employee_id` es FK a AUTH_USER_MODEL (migración inicial)
+                # 2) `employee_id` es FK a tabla Employee (modelo actual)
                 try:
-                    user = User.objects.get(pk=employee_id)
-                    employee_name = f"{user.first_name} {user.last_name}".strip()
+                    if employee_id is not None:
+                        try:
+                            user = User.objects.get(pk=employee_id)
+                            employee_name = f"{user.first_name} {user.last_name}".strip()
+                        except User.DoesNotExist:
+                            # intentar como Employee.pk -> Employee.user
+                            try:
+                                emp = Employee.objects.get(pk=employee_id)
+                                if hasattr(emp, 'user') and emp.user is not None:
+                                    employee_name = f"{emp.user.first_name} {emp.user.last_name}".strip()
+                            except Exception:
+                                # no bloquear si tampoco existe
+                                employee_name = None
+
                 except Exception:
-                    # no bloqueamos por falta de nombre; puede ser nulo en la BD
+                    # garantizar que cualquier error aquí no rompa la respuesta
                     employee_name = None
+
+                # Asegurar formato seguro para start/end (puede venir como str desde el driver)
+                def safe_iso(dt):
+                    if dt is None:
+                        return None
+                    # Si el objeto tiene isoformat (datetime/date), usarlo
+                    if hasattr(dt, 'isoformat'):
+                        try:
+                            return dt.isoformat()
+                        except Exception:
+                            return str(dt)
+                    # si es bytes o str, convertir a str
+                    return str(dt)
 
                 shifts.append({
                     'id': pk,
-                    'start': start_dt.isoformat() if start_dt is not None else None,
-                    'end': end_dt.isoformat() if end_dt is not None else None,
-                    'shift_type': shift_type,
-                    'role': role_in_shift,
+                    'start': safe_iso(start_dt),
+                    'end': safe_iso(end_dt),
+                    'shift_type': shift_type if shift_type is not None else None,
+                    'role': role_in_shift if role_in_shift is not None else None,
                     'employee_id': employee_id,
                     'employee_name': employee_name,
                 })
@@ -318,4 +347,8 @@ class ShiftListAPIView(APIView):
             return Response(shifts)
         except Exception as exc:
             logging.exception("Error fetching shifts for API")
+            # In DEBUG return detailed traceback to help debugging; in production return generic message
+            if getattr(settings, 'DEBUG', False):
+                tb = traceback.format_exc()
+                return Response({'detail': str(exc), 'traceback': tb}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
             return Response({'detail': 'Error al obtener turnos'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
