@@ -30,13 +30,16 @@ class Employee(models.Model):
         return f"{self.user.first_name} {self.user.last_name}"
 
 class Shift(models.Model):
-    date = models.DateField()
-    start_time = models.TimeField()
-    end_time = models.TimeField()
-    employee = models.ForeignKey(Employee, on_delete=models.CASCADE)
-    shift_type = models.ForeignKey(ShiftType, on_delete=models.CASCADE)
-    role = models.CharField(max_length=100)
-    notes = models.TextField(blank=True)
+    # Campos marcados como nullable temporalmente para permitir migraciones
+    # incrementales (se crearán migraciones de alteración una vez que los
+    # datos sean backfilled).
+    date = models.DateField(null=True, blank=True)
+    start_time = models.TimeField(null=True, blank=True)
+    end_time = models.TimeField(null=True, blank=True)
+    employee = models.ForeignKey(Employee, on_delete=models.CASCADE, null=True, blank=True)
+    shift_type = models.ForeignKey(ShiftType, on_delete=models.CASCADE, null=True, blank=True)
+    role = models.CharField(max_length=100, null=True, blank=True)
+    notes = models.TextField(blank=True, null=True)
     
     class Meta:
         unique_together = ['employee', 'date', 'start_time']
