@@ -13,6 +13,7 @@ class EmployeeAdmin(admin.ModelAdmin):
 
 @admin.register(Shift)
 class ShiftAdmin(admin.ModelAdmin):
-    list_display = ['employee', 'date', 'start_time', 'end_time', 'shift_type', 'role']
+    # `role` field was removed from the Shift model; use employee/position instead
+    list_display = ['employee', 'date', 'start_time', 'end_time', 'shift_type']
     list_filter = ['date', 'shift_type', 'employee']
-    search_fields = ['employee__user__first_name', 'employee__user__last_name', 'role']
+    search_fields = ['employee__user__first_name', 'employee__user__last_name']
