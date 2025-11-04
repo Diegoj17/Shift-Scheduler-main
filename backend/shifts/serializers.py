@@ -10,7 +10,7 @@ User = get_user_model()
 class ShiftSerializer(serializers.ModelSerializer):
     class Meta:
         model = Shift
-        fields = ("id", "employee", "start", "end", "shift_type", "role_in_shift", "created_by", "created_at")
+        fields = ("id", "employee", "start", "end", "shift_type", "role_in_shift", "notes", "created_by", "created_at")
         read_only_fields = ("id", "created_by", "created_at")
 
     def validate(self, data):
@@ -79,6 +79,8 @@ class ShiftCreateSerializer(serializers.Serializer):
     def validate(self, data):
         from .models import Employee, Shift, ShiftType
         from django.core.exceptions import ValidationError
+        from django.contrib.auth import get_user_model
+        User = get_user_model()
 
         date = data.get('date')
         start_time = data.get('start_time')
@@ -88,20 +90,16 @@ class ShiftCreateSerializer(serializers.Serializer):
         if start_time >= end_time:
             raise serializers.ValidationError("La hora de inicio debe ser anterior a la de fin.")
 
-        # validar empleado
+        # Validar empleado
         employee = None
-        # aceptar varios formatos: int id (Employee.pk), id de User (user__pk),
-        # o dict/obj con 'id'/'pk', o email de usuario.
-        from django.contrib.auth import get_user_model
-        User = get_user_model()
-
-        # extraer un valor usable desde payloads inesperados
+        
+        # Extraer valor del empleado
         if isinstance(emp_id, dict):
             emp_val = emp_id.get('id') or emp_id.get('pk')
         else:
             emp_val = emp_id
 
-        # intentar interpretar como entero (pk)
+        # Interpretar como entero
         emp_int = None
         try:
             if emp_val is not None:
@@ -113,25 +111,19 @@ class ShiftCreateSerializer(serializers.Serializer):
             employee = Employee.objects.filter(pk=emp_int).first()
             if not employee:
                 employee = Employee.objects.filter(user__pk=emp_int).first()
-                # Si no existe Employee pero sí existe un User con ese id,
-                # crear automáticamente un Employee enlazado al User. Esto
-                # cubre despliegues donde la app usa `users_user` pero no se
-                # han creado registros en `shifts_employee`.
                 if not employee:
                     try:
                         user_tmp = User.objects.filter(pk=emp_int).first()
                         if user_tmp:
-                            # crear Employee con datos mínimos
                             employee = Employee.objects.create(
                                 user=user_tmp,
                                 position=getattr(user_tmp, 'puesto', '') or 'Desconocido',
                                 is_active=True
                             )
                     except Exception:
-                        # si la creación falla, seguimos y se lanzará el error más abajo
                         employee = None
 
-        # si no lo encontramos, intentar buscar por email si nos dieron un string con '@'
+        # Buscar por email si es string
         if not employee and isinstance(emp_val, str) and '@' in emp_val:
             user = User.objects.filter(email=emp_val).first()
             if user:
@@ -145,26 +137,32 @@ class ShiftCreateSerializer(serializers.Serializer):
         if not getattr(employee, 'is_active', True):
             raise serializers.ValidationError({"employee": "Empleado no está activo."})
 
-        # verificar solapamiento en la misma fecha
+        # ✅ CRÍTICO: Verificar solapamiento excluyendo el turno actual si es update
         conflicts = Shift.objects.filter(
             employee=employee,
             date=date,
             start_time__lt=end_time,
             end_time__gt=start_time
         )
+        
+        # ✅ Excluir el turno actual si estamos actualizando
+        if self.instance:
+            conflicts = conflicts.exclude(pk=self.instance.pk)
+            print(f"🔄 [ShiftCreateSerializer] Actualizando turno {self.instance.pk} - excluyendo de validación")
+        
         if conflicts.exists():
             c = conflicts.first()
             raise serializers.ValidationError({
                 "detail": f"Solapamiento con turno existente: {c.start_time} - {c.end_time} en {c.date}"
             })
 
-        # validar shift_type existe
+        # Validar shift_type existe
         try:
             ShiftType.objects.get(pk=data.get('shift_type'))
         except ShiftType.DoesNotExist:
             raise serializers.ValidationError({"shift_type": "Tipo de turno no encontrado."})
 
-        # attach objects for create
+        # Attach objects
         data['employee_obj'] = employee
         data['shift_type_obj'] = ShiftType.objects.get(pk=data.get('shift_type'))
         return data
@@ -178,9 +176,29 @@ class ShiftCreateSerializer(serializers.Serializer):
             end_time=validated_data['end_time'],
             employee=validated_data['employee_obj'],
             shift_type=validated_data['shift_type_obj'],
-            notes=validated_data.get('notes')
+            notes=validated_data.get('notes', '')
         )
-        # run model validation (checks overlaps, time ordering, etc.)
         shift.full_clean()
         shift.save()
         return shift
+
+    # ✅ AGREGAR método update
+    def update(self, instance, validated_data):
+        from .models import Shift
+        
+        print(f"🔄 [ShiftCreateSerializer] Actualizando turno {instance.pk}")
+        print(f"📝 Datos validados: {validated_data}")
+        
+        instance.date = validated_data.get('date', instance.date)
+        instance.start_time = validated_data.get('start_time', instance.start_time)
+        instance.end_time = validated_data.get('end_time', instance.end_time)
+        instance.employee = validated_data.get('employee_obj', instance.employee)
+        instance.shift_type = validated_data.get('shift_type_obj', instance.shift_type)
+        instance.notes = validated_data.get('notes', instance.notes)
+        
+        # Validar y guardar
+        instance.full_clean()
+        instance.save()
+        
+        print(f"✅ Turno {instance.pk} actualizado exitosamente")
+        return instance
