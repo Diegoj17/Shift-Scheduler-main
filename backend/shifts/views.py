@@ -15,6 +15,7 @@ from rest_framework.response import Response
 from rest_framework import status, permissions
 from rest_framework_simplejwt.authentication import JWTAuthentication
 from .serializers import ShiftTypeSerializer
+from .serializers import ShiftCreateSerializer
 import logging
 import traceback
 from django.conf import settings
@@ -260,6 +261,38 @@ class ShiftTypeCreateAPIView(APIView):
                 return Response({'detail': str(exc), 'traceback': tb}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
             return Response({'detail': 'Internal server error while creating ShiftType'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
+
+class ShiftCreateAPIView(APIView):
+    """API para crear turnos desde el frontend (JSON).
+
+    Endpoint: POST /api/shifts/new/
+    Requiere JWT Authentication y devuelve 201 con el turno creado.
+    """
+    authentication_classes = [JWTAuthentication]
+    permission_classes = [permissions.IsAuthenticated]
+
+    def post(self, request, *args, **kwargs):
+        try:
+            serializer = ShiftCreateSerializer(data=request.data)
+            if serializer.is_valid():
+                instance = serializer.save()
+                # devolver representación simple
+                return Response({
+                    'id': instance.id,
+                    'date': instance.date.isoformat() if instance.date else None,
+                    'start_time': instance.start_time.isoformat() if instance.start_time else None,
+                    'end_time': instance.end_time.isoformat() if instance.end_time else None,
+                    'employee_id': getattr(instance.employee, 'id', None),
+                    'shift_type_id': getattr(instance.shift_type, 'id', None),
+                    'notes': instance.notes,
+                }, status=status.HTTP_201_CREATED)
+            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+        except Exception as exc:
+            logging.exception("Unhandled exception creating Shift via API")
+            if getattr(settings, 'DEBUG', False):
+                return Response({'detail': str(exc), 'traceback': traceback.format_exc()}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+            return Response({'detail': 'Error al crear turno'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
 class ShiftTypeUpdateAPIView(APIView):
     """API para actualizar tipos de turno"""
     authentication_classes = [JWTAuthentication]
@@ -316,9 +349,18 @@ class ShiftListAPIView(APIView):
             User = get_user_model()
             shifts = []
 
-            # Intentar usar el ORM (es el camino correcto cuando las migraciones
-            # están aplicadas). Si falla (DB esquema histórico), caeremos al
-            # bloque except y usaremos la consulta SQL antigua.
+            # Helper para formatear de forma segura
+            def safe_iso(dt):
+                if dt is None:
+                    return None
+                if hasattr(dt, 'isoformat'):
+                    try:
+                        return dt.isoformat()
+                    except Exception:
+                        return str(dt)
+                return str(dt)
+
+            # Intentar usar el ORM primero (camino correcto con migraciones aplicadas)
             try:
                 qs = Shift.objects.all().values(
                     'id', 'date', 'start_time', 'end_time', 'shift_type_id', 'role', 'employee_id'
@@ -328,8 +370,8 @@ class ShiftListAPIView(APIView):
                     date = r.get('date')
                     start_dt = r.get('start_time')
                     end_dt = r.get('end_time')
+
                     shift_type = None
-                    # si shift_type_id existe, intentar resolver nombre/color si es posible
                     st_id = r.get('shift_type_id')
                     if st_id:
                         try:
@@ -342,43 +384,24 @@ class ShiftListAPIView(APIView):
                     employee_id = r.get('employee_id')
                     employee_name = None
 
-                # Obtener nombre del empleado tratando ambos casos posibles:
-                # 1) `employee_id` es FK a AUTH_USER_MODEL (migración inicial)
-                # 2) `employee_id` es FK a tabla Employee (modelo actual)
-                try:
-                    if employee_id is not None:
-                        try:
-                            user = User.objects.get(pk=employee_id)
-                            employee_name = f"{user.first_name} {user.last_name}".strip()
-                        except User.DoesNotExist:
-                            # intentar como Employee.pk -> Employee.user
+                    # Obtener nombre del empleado tratando ambos casos posibles
+                    try:
+                        if employee_id is not None:
                             try:
-                                emp = Employee.objects.get(pk=employee_id)
-                                if hasattr(emp, 'user') and emp.user is not None:
-                                    employee_name = f"{emp.user.first_name} {emp.user.last_name}".strip()
-                            except Exception:
-                                # no bloquear si tampoco existe
-                                employee_name = None
+                                user = User.objects.get(pk=employee_id)
+                                employee_name = f"{user.first_name} {user.last_name}".strip()
+                            except User.DoesNotExist:
+                                try:
+                                    emp = Employee.objects.get(pk=employee_id)
+                                    if hasattr(emp, 'user') and emp.user is not None:
+                                        employee_name = f"{emp.user.first_name} {emp.user.last_name}".strip()
+                                except Exception:
+                                    employee_name = None
+                    except Exception:
+                        employee_name = None
 
-                except Exception:
-                    # garantizar que cualquier error aquí no rompa la respuesta
-                    employee_name = None
-
-                    # Asegurar formato seguro para start/end (puede venir como str desde el driver)
-                def safe_iso(dt):
-                    if dt is None:
-                        return None
-                    # Si el objeto tiene isoformat (datetime/date), usarlo
-                    if hasattr(dt, 'isoformat'):
-                        try:
-                            return dt.isoformat()
-                        except Exception:
-                            return str(dt)
-                    # si es bytes o str, convertir a str
-                    return str(dt)
                     shifts.append({
                         'id': pk,
-                        # Para el frontend usamos start/end en ISO datetimes.
                         'start': safe_iso(datetime.combine(date, start_dt)) if (date and start_dt) else safe_iso(start_dt),
                         'end': safe_iso(datetime.combine(date, end_dt)) if (date and end_dt) else safe_iso(end_dt),
                         'shift_type': shift_type if shift_type is not None else None,
@@ -390,17 +413,24 @@ class ShiftListAPIView(APIView):
                 return Response(shifts)
 
             except Exception:
-                # Caer al código legacy para bases de datos que aún usan
-                # columnas antiguas: start, end, shift_type, role_in_shift, employee_id
+                # Código legacy para bases de datos con esquema antiguo
                 with connection.cursor() as cursor:
                     cursor.execute("SELECT id, start, end, shift_type, role_in_shift, employee_id FROM shifts_shift")
                     rows = cursor.fetchall()
 
                 for row in rows:
                     pk, start_dt, end_dt, shift_type, role_in_shift, employee_id = row
-                    employee_name = None
+                    shifts.append({
+                        'id': pk,
+                        'start': safe_iso(start_dt),
+                        'end': safe_iso(end_dt),
+                        'shift_type': shift_type,
+                        'role': role_in_shift,
+                        'employee_id': employee_id,
+                        'employee_name': None,
+                    })
 
-            return Response(shifts)
+                return Response(shifts)
         except Exception as exc:
             logging.exception("Error fetching shifts for API")
             # In DEBUG return detailed traceback to help debugging; in production return generic message
@@ -408,3 +438,131 @@ class ShiftListAPIView(APIView):
                 tb = traceback.format_exc()
                 return Response({'detail': str(exc), 'traceback': tb}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
             return Response({'detail': 'Error al obtener turnos'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+    class ShiftUpdateAPIView(APIView):
+        """API para actualizar un turno existente."""
+        authentication_classes = [JWTAuthentication]
+        permission_classes = [permissions.IsAuthenticated]
+
+        def put(self, request, pk, *args, **kwargs):
+            try:
+                shift = Shift.objects.get(pk=pk)
+            except Shift.DoesNotExist:
+                return Response({'error': 'Turno no encontrado'}, status=status.HTTP_404_NOT_FOUND)
+
+            # Reutilizamos el serializer de creación para validar/guardar
+            serializer = ShiftCreateSerializer(shift, data=request.data)
+            if serializer.is_valid():
+                try:
+                    instance = serializer.save()
+                    return Response({
+                        'id': instance.id,
+                        'date': instance.date.isoformat() if instance.date else None,
+                        'start_time': instance.start_time.isoformat() if instance.start_time else None,
+                        'end_time': instance.end_time.isoformat() if instance.end_time else None,
+                        'employee_id': getattr(instance.employee, 'id', None),
+                        'shift_type_id': getattr(instance.shift_type, 'id', None),
+                        'notes': instance.notes,
+                    })
+                except Exception as exc:
+                    logging.exception("Unhandled exception updating Shift via API")
+                    if getattr(settings, 'DEBUG', False):
+                        return Response({'detail': str(exc), 'traceback': traceback.format_exc()}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+                    return Response({'detail': 'Error al actualizar turno'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+
+    class ShiftDeleteAPIView(APIView):
+        """API para eliminar un turno por pk."""
+        authentication_classes = [JWTAuthentication]
+        permission_classes = [permissions.IsAuthenticated]
+
+        def delete(self, request, pk, *args, **kwargs):
+            try:
+                shift = Shift.objects.get(pk=pk)
+            except Shift.DoesNotExist:
+                return Response({'error': 'Turno no encontrado'}, status=status.HTTP_404_NOT_FOUND)
+
+            try:
+                shift.delete()
+                return Response({'message': 'Turno eliminado exitosamente'}, status=status.HTTP_204_NO_CONTENT)
+            except Exception as exc:
+                logging.exception("Unhandled exception deleting Shift via API")
+                if getattr(settings, 'DEBUG', False):
+                    return Response({'detail': str(exc), 'traceback': traceback.format_exc()}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+                return Response({'detail': 'Error al eliminar turno'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+    class ShiftDuplicateAPIView(APIView):
+        """API para duplicar turnos desde un rango origen hacia una fecha objetivo.
+
+        Espera JSON con: start_date, end_date, target_start_date (formato ISO YYYY-MM-DD).
+        Devuelve conteos y lista de conflictos (si los hay).
+        """
+        authentication_classes = [JWTAuthentication]
+        permission_classes = [permissions.IsAuthenticated]
+
+        def post(self, request, *args, **kwargs):
+            data = request.data
+            try:
+                start_date_str = data.get('start_date')
+                end_date_str = data.get('end_date')
+                target_start_date_str = data.get('target_start_date')
+
+                if not (start_date_str and end_date_str and target_start_date_str):
+                    return Response({'error': 'start_date, end_date y target_start_date son requeridos'}, status=status.HTTP_400_BAD_REQUEST)
+
+                start_date = datetime.fromisoformat(start_date_str).date()
+                end_date = datetime.fromisoformat(end_date_str).date()
+                target_start_date = datetime.fromisoformat(target_start_date_str).date()
+
+            except Exception as exc:
+                return Response({'error': 'Formato de fecha inválido, usar YYYY-MM-DD'}, status=status.HTTP_400_BAD_REQUEST)
+
+            day_difference = (target_start_date - start_date).days
+
+            source_shifts = Shift.objects.filter(date__range=[start_date, end_date]).select_related('employee', 'shift_type')
+
+            created_count = 0
+            conflict_count = 0
+            conflicts = []
+
+            with transaction.atomic():
+                for source_shift in source_shifts:
+                    new_date = source_shift.date + timedelta(days=day_difference)
+
+                    conflicting_shift = Shift.objects.filter(
+                        employee=source_shift.employee,
+                        date=new_date,
+                        start_time__lt=source_shift.end_time,
+                        end_time__gt=source_shift.start_time
+                    ).exists()
+
+                    if not conflicting_shift:
+                        Shift.objects.create(
+                            date=new_date,
+                            start_time=source_shift.start_time,
+                            end_time=source_shift.end_time,
+                            employee=source_shift.employee,
+                            shift_type=source_shift.shift_type,
+                            notes=source_shift.notes
+                        )
+                        created_count += 1
+                    else:
+                        conflict_count += 1
+                        conflicts.append({
+                            'employee_id': getattr(source_shift.employee, 'id', None),
+                            'date': new_date.isoformat(),
+                            'time': f"{source_shift.start_time}-{source_shift.end_time}",
+                        })
+
+            result = {
+                'created': created_count,
+                'conflicts': conflict_count,
+                'conflict_items': conflicts,
+            }
+
+            status_code = status.HTTP_201_CREATED if conflict_count == 0 else status.HTTP_207_MULTI_STATUS
+            return Response(result, status=status_code)

@@ -66,3 +66,73 @@ class ShiftTypeSerializer(serializers.ModelSerializer):
         if start and end and start >= end:
             raise serializers.ValidationError("La hora de fin debe ser mayor a la hora de inicio")
         return data
+
+
+class ShiftCreateSerializer(serializers.Serializer):
+    date = serializers.DateField()
+    start_time = serializers.TimeField()
+    end_time = serializers.TimeField()
+    employee = serializers.IntegerField()
+    shift_type = serializers.IntegerField()
+    notes = serializers.CharField(allow_blank=True, required=False)
+
+    def validate(self, data):
+        from .models import Employee, Shift, ShiftType
+        from django.core.exceptions import ValidationError
+
+        date = data.get('date')
+        start_time = data.get('start_time')
+        end_time = data.get('end_time')
+        emp_id = data.get('employee')
+
+        if start_time >= end_time:
+            raise serializers.ValidationError("La hora de inicio debe ser anterior a la de fin.")
+
+        # validar empleado
+        try:
+            employee = Employee.objects.get(pk=emp_id)
+        except Employee.DoesNotExist:
+            raise serializers.ValidationError({"employee": "Empleado no encontrado."})
+
+        if not employee.is_active:
+            raise serializers.ValidationError({"employee": "Empleado no está activo."})
+
+        # verificar solapamiento en la misma fecha
+        conflicts = Shift.objects.filter(
+            employee=employee,
+            date=date,
+            start_time__lt=end_time,
+            end_time__gt=start_time
+        )
+        if conflicts.exists():
+            c = conflicts.first()
+            raise serializers.ValidationError({
+                "detail": f"Solapamiento con turno existente: {c.start_time} - {c.end_time} en {c.date}"
+            })
+
+        # validar shift_type existe
+        try:
+            ShiftType.objects.get(pk=data.get('shift_type'))
+        except ShiftType.DoesNotExist:
+            raise serializers.ValidationError({"shift_type": "Tipo de turno no encontrado."})
+
+        # attach objects for create
+        data['employee_obj'] = employee
+        data['shift_type_obj'] = ShiftType.objects.get(pk=data.get('shift_type'))
+        return data
+
+    def create(self, validated_data):
+        from .models import Shift
+
+        shift = Shift(
+            date=validated_data['date'],
+            start_time=validated_data['start_time'],
+            end_time=validated_data['end_time'],
+            employee=validated_data['employee_obj'],
+            shift_type=validated_data['shift_type_obj'],
+            notes=validated_data.get('notes')
+        )
+        # run model validation (checks overlaps, time ordering, etc.)
+        shift.full_clean()
+        shift.save()
+        return shift

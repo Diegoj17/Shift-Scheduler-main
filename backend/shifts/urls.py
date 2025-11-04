@@ -4,9 +4,7 @@ from . import views
 urlpatterns = [
     # Turnos
     path('', views.shift_calendar, name='shift_calendar'),
-    # API-friendly endpoint: return JSON list for frontend calendar
     path('shifts/', views.ShiftListAPIView.as_view(), name='shift_list'),
-    path('shifts/new/', views.ShiftCreateView.as_view(), name='shift_create'),
     path('shifts/<int:pk>/edit/', views.ShiftUpdateView.as_view(), name='shift_edit'),
     path('shifts/<int:pk>/delete/', views.ShiftDeleteView.as_view(), name='shift_delete'),
     path('shifts/duplicate/', views.shift_duplicate, name='shift_duplicate'),
@@ -22,4 +20,11 @@ urlpatterns = [
     path('api/shift-types/new/', views.ShiftTypeCreateAPIView.as_view(), name='shifttype_api_create'),
     path('api/shift-types/<int:pk>/edit/', views.ShiftTypeUpdateAPIView.as_view(), name='shifttype_api_edit'),
     path('api/shift-types/<int:pk>/delete/', views.ShiftTypeDeleteAPIView.as_view(), name='shifttype_api_delete'),
+    
+    path('api/shifts/', views.ShiftListAPIView.as_view(), name='shift_list'),
+    path('api/shifts/new/', views.ShiftCreateAPIView.as_view(), name='shift_api_create'),
+    path('api/shifts/<int:pk>/edit/', views.ShiftUpdateAPIView.as_view(), name='shift_api_edit'),
+    path('api/shifts/<int:pk>/delete/', views.ShiftDeleteAPIView.as_view(), name='shift_api_delete'),
+    path('api/shifts/duplicate/', views.ShiftDuplicateAPIView.as_view(), name='shift_api_duplicate'),
+    
 ]
