@@ -38,7 +38,9 @@ class Shift(models.Model):
     end_time = models.TimeField(null=True, blank=True)
     employee = models.ForeignKey(Employee, on_delete=models.CASCADE, null=True, blank=True)
     shift_type = models.ForeignKey(ShiftType, on_delete=models.CASCADE, null=True, blank=True)
-    role = models.CharField(max_length=100, null=True, blank=True)
+    # role se elimina del modelo y de la forma de creación: el rol/puesto
+    # se obtiene del `User`/`Employee` (asignado por Gerente/Admin).
+    # Conservamos notes.
     notes = models.TextField(blank=True, null=True)
     
     class Meta:

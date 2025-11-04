@@ -37,13 +37,14 @@ def shift_calendar(request):
     for shift in shifts:
         shifts_data.append({
             'id': shift.id,
-            'title': f"{shift.employee.user.first_name} - {shift.role}",
+            # Mostrar puesto/rol según el perfil del empleado (asignado por gerente/admin)
+            'title': f"{shift.employee.user.first_name} - {getattr(shift.employee.user, 'puesto', None) or getattr(shift.employee, 'position', '')}",
             'start': f"{shift.date}T{shift.start_time}",
             'end': f"{shift.date}T{shift.end_time}",
             'color': shift.shift_type.color,
             'employee': shift.employee.user.get_full_name(),
             'shift_type': shift.shift_type.name,
-            'role': shift.role,
+            'role': getattr(shift.employee.user, 'puesto', None) or getattr(shift.employee, 'position', None),
         })
     
     context = {
@@ -157,7 +158,6 @@ def shift_duplicate(request):
                             end_time=source_shift.end_time,
                             employee=source_shift.employee,
                             shift_type=source_shift.shift_type,
-                            role=source_shift.role,
                             notes=source_shift.notes
                         )
                         created_count += 1
