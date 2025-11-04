@@ -90,7 +90,15 @@ class ShiftCreateSerializer(serializers.Serializer):
 
         # validar empleado
         try:
-            employee = Employee.objects.get(pk=emp_id)
+            # Accept either Employee.pk or a linked User.pk from the frontend.
+            try:
+                employee = Employee.objects.get(pk=emp_id)
+            except Employee.DoesNotExist:
+                # intentar usar user__pk (frontend podría enviar id de User en lugar de Employee)
+                try:
+                    employee = Employee.objects.get(user__pk=emp_id)
+                except Employee.DoesNotExist:
+                    raise
         except Employee.DoesNotExist:
             raise serializers.ValidationError({"employee": "Empleado no encontrado."})
 
