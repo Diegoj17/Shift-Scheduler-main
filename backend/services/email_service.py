@@ -27,7 +27,7 @@ class EmailService:
             base = os.environ.get('PASSWORD_RESET_CONFIRM_FRONTEND_URL') or self.frontend_url
 
             if uid:
-                reset_url = f"{base}/reset-password/confirm?uid={uid}&token={reset_token}"
+                reset_url = f"{base}?uid={uid}&token={reset_token}"
             else:
                 reset_url = f"{base}/reset-password/confirm?token={reset_token}"
             
