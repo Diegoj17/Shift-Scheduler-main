@@ -113,6 +113,23 @@ class ShiftCreateSerializer(serializers.Serializer):
             employee = Employee.objects.filter(pk=emp_int).first()
             if not employee:
                 employee = Employee.objects.filter(user__pk=emp_int).first()
+                # Si no existe Employee pero sí existe un User con ese id,
+                # crear automáticamente un Employee enlazado al User. Esto
+                # cubre despliegues donde la app usa `users_user` pero no se
+                # han creado registros en `shifts_employee`.
+                if not employee:
+                    try:
+                        user_tmp = User.objects.filter(pk=emp_int).first()
+                        if user_tmp:
+                            # crear Employee con datos mínimos
+                            employee = Employee.objects.create(
+                                user=user_tmp,
+                                position=getattr(user_tmp, 'puesto', '') or 'Desconocido',
+                                is_active=True
+                            )
+                    except Exception:
+                        # si la creación falla, seguimos y se lanzará el error más abajo
+                        employee = None
 
         # si no lo encontramos, intentar buscar por email si nos dieron un string con '@'
         if not employee and isinstance(emp_val, str) and '@' in emp_val:
