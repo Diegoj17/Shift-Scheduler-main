@@ -2,6 +2,14 @@ from django.urls import path
 from . import views
 
 urlpatterns = [
+    # Compatibilidad: exponer algunos endpoints API directamente sin el
+    # prefijo interno 'api/' para que las llamadas a '/api/shift-types/new/'
+    # o '/api/shifts/new/' (cuando `shifts.urls` se incluye en core.urls
+    # bajo 'api/') lleguen a las APIViews y no a las vistas HTML que
+    # requieren CSRF/session auth.
+    path('shift-types/new/', views.ShiftTypeCreateAPIView.as_view(), name='shifttype_api_create_compat'),
+    path('shifts/new/', views.ShiftCreateAPIView.as_view(), name='shift_api_create_compat'),
+
     # Turnos
     path('', views.shift_calendar, name='shift_calendar'),
     path('shifts/', views.ShiftListAPIView.as_view(), name='shift_list'),
