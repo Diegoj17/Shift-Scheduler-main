@@ -5,6 +5,7 @@ urlpatterns = [
 # ✅ API ENDPOINTS - Rutas limpias y consistentes
     # Turnos
     path('shifts/', views.ShiftListAPIView.as_view(), name='shift_list'),
+    path('shifts/my/', views.MyShiftsAPIView.as_view(), name='my_shifts'),
     path('shifts/new/', views.ShiftCreateAPIView.as_view(), name='shift_api_create'),
     path('shifts/<int:pk>/edit/', views.ShiftUpdateAPIView.as_view(), name='shift_api_edit'),
     path('shifts/<int:pk>/delete/', views.ShiftDeleteAPIView.as_view(), name='shift_api_delete'),
