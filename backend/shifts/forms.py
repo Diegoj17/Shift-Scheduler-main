@@ -25,7 +25,10 @@ class ShiftTypeForm(forms.ModelForm):
 class ShiftForm(forms.ModelForm):
     class Meta:
         model = Shift
-        fields = ['date', 'start_time', 'end_time', 'employee', 'shift_type', 'role', 'notes']
+        # removemos `role` del formulario de creación/edición rápida porque
+        # el puesto/rol se obtiene del perfil del empleado (asignado por
+        # Gerente/Admin). Se conserva `notes`.
+        fields = ['date', 'start_time', 'end_time', 'employee', 'shift_type', 'notes']
         widgets = {
             'date': forms.DateInput(attrs={'type': 'date'}),
             'start_time': forms.TimeInput(attrs={'type': 'time'}),

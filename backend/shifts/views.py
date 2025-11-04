@@ -61,6 +61,31 @@ class ShiftCreateView(CreateView):
     
     def form_valid(self, form):
         try:
+            # Asignar automáticamente el role/puesto desde el perfil del empleado
+            # (el gerente/admin debe haberlo rellenado en el usuario o en el
+            # objeto Employee). No confíes en datos del formulario para eso.
+            employee = form.cleaned_data.get('employee')
+            role_value = None
+            if employee is not None:
+                # intento: primero desde el usuario enlazado
+                try:
+                    user = getattr(employee, 'user', None)
+                    if user is not None:
+                        role_value = getattr(user, 'puesto', None)
+                except Exception:
+                    role_value = None
+
+                # fallback al campo `position` del modelo Employee (si existe)
+                if not role_value:
+                    try:
+                        role_value = getattr(employee, 'position', None)
+                    except Exception:
+                        role_value = None
+
+            # asignar al instance antes de guardar
+            if role_value:
+                form.instance.role = role_value
+
             response = super().form_valid(form)
             messages.success(self.request, 'Turno creado exitosamente')
             return response
@@ -289,15 +314,33 @@ class ShiftListAPIView(APIView):
     def get(self, request, *args, **kwargs):
         try:
             User = get_user_model()
-            with connection.cursor() as cursor:
-                # columnas presentes según la migración inicial: start, end, shift_type, role_in_shift, employee_id
-                cursor.execute("SELECT id, start, end, shift_type, role_in_shift, employee_id FROM shifts_shift")
-                rows = cursor.fetchall()
-
             shifts = []
-            for row in rows:
-                pk, start_dt, end_dt, shift_type, role_in_shift, employee_id = row
-                employee_name = None
+
+            # Intentar usar el ORM (es el camino correcto cuando las migraciones
+            # están aplicadas). Si falla (DB esquema histórico), caeremos al
+            # bloque except y usaremos la consulta SQL antigua.
+            try:
+                qs = Shift.objects.all().values(
+                    'id', 'date', 'start_time', 'end_time', 'shift_type_id', 'role', 'employee_id'
+                )
+                for r in qs:
+                    pk = r['id']
+                    date = r.get('date')
+                    start_dt = r.get('start_time')
+                    end_dt = r.get('end_time')
+                    shift_type = None
+                    # si shift_type_id existe, intentar resolver nombre/color si es posible
+                    st_id = r.get('shift_type_id')
+                    if st_id:
+                        try:
+                            st_obj = ShiftType.objects.get(pk=st_id)
+                            shift_type = st_obj.name
+                        except Exception:
+                            shift_type = None
+
+                    role_in_shift = r.get('role')
+                    employee_id = r.get('employee_id')
+                    employee_name = None
 
                 # Obtener nombre del empleado tratando ambos casos posibles:
                 # 1) `employee_id` es FK a AUTH_USER_MODEL (migración inicial)
@@ -321,7 +364,7 @@ class ShiftListAPIView(APIView):
                     # garantizar que cualquier error aquí no rompa la respuesta
                     employee_name = None
 
-                # Asegurar formato seguro para start/end (puede venir como str desde el driver)
+                    # Asegurar formato seguro para start/end (puede venir como str desde el driver)
                 def safe_iso(dt):
                     if dt is None:
                         return None
@@ -333,16 +376,29 @@ class ShiftListAPIView(APIView):
                             return str(dt)
                     # si es bytes o str, convertir a str
                     return str(dt)
+                    shifts.append({
+                        'id': pk,
+                        # Para el frontend usamos start/end en ISO datetimes.
+                        'start': safe_iso(datetime.combine(date, start_dt)) if (date and start_dt) else safe_iso(start_dt),
+                        'end': safe_iso(datetime.combine(date, end_dt)) if (date and end_dt) else safe_iso(end_dt),
+                        'shift_type': shift_type if shift_type is not None else None,
+                        'role': role_in_shift if role_in_shift is not None else None,
+                        'employee_id': employee_id,
+                        'employee_name': employee_name,
+                    })
 
-                shifts.append({
-                    'id': pk,
-                    'start': safe_iso(start_dt),
-                    'end': safe_iso(end_dt),
-                    'shift_type': shift_type if shift_type is not None else None,
-                    'role': role_in_shift if role_in_shift is not None else None,
-                    'employee_id': employee_id,
-                    'employee_name': employee_name,
-                })
+                return Response(shifts)
+
+            except Exception:
+                # Caer al código legacy para bases de datos que aún usan
+                # columnas antiguas: start, end, shift_type, role_in_shift, employee_id
+                with connection.cursor() as cursor:
+                    cursor.execute("SELECT id, start, end, shift_type, role_in_shift, employee_id FROM shifts_shift")
+                    rows = cursor.fetchall()
+
+                for row in rows:
+                    pk, start_dt, end_dt, shift_type, role_in_shift, employee_id = row
+                    employee_name = None
 
             return Response(shifts)
         except Exception as exc:
