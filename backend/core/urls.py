@@ -21,10 +21,6 @@ from django.http import JsonResponse
 urlpatterns = [
     path("admin/", admin.site.urls),
     path("api/auth/", include("users.urls")),
-    # Compatibilidad temporal: algunos clientes hacen peticiones a /api/api/...
-    # (doble 'api'). Añadimos este include para evitar 404 hasta que el
-    # frontend sea corregido.
-    path("api/", include("shifts.urls")),
-    # Health check simple para comprobar que la app responde (útil para deploys y debugging)
+    path("api/shifts/", include("shifts.urls")),  # ← Solo esta línea para shifts
     path("health/", lambda request: JsonResponse({"status": "ok"})),
 ]
