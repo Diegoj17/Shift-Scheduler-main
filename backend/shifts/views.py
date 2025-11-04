@@ -373,19 +373,7 @@ class ShiftListAPIView(APIView):
 
     def get(self, request, *args, **kwargs):
         try:
-            User = get_user_model()
             shifts = []
-
-            # Helper para formatear de forma segura
-            def safe_iso(dt):
-                if dt is None:
-                    return None
-                if hasattr(dt, 'isoformat'):
-                    try:
-                        return dt.isoformat()
-                    except Exception:
-                        return str(dt)
-                return str(dt)
 
             try:
                 # Usar ORM con todas las relaciones necesarias
@@ -408,39 +396,46 @@ class ShiftListAPIView(APIView):
                     if shift.employee and shift.employee.user:
                         user = shift.employee.user
                         employee_name = f"{user.first_name} {user.last_name}".strip()
-                        # Obtener el rol del campo 'puesto' del User
-                        role = getattr(user, 'puesto', '') or getattr(shift.employee, 'position', 'Sin rol')
+                        
+                        # Obtener el rol: primero de user.puesto, luego de employee.position
+                        role = getattr(user, 'puesto', None) or getattr(shift.employee, 'position', None) or "Sin rol"
+                    
+                    # Si no hay user, usar solo employee
+                    elif shift.employee:
+                        employee_name = f"Empleado {shift.employee.id}"
+                        role = getattr(shift.employee, 'position', 'Sin rol')
                     
                     # Obtener información del tipo de turno
                     shift_type_name = shift.shift_type.name if shift.shift_type else "Sin tipo"
                     color = shift.shift_type.color if shift.shift_type else '#3788d8'
                     
                     # Formatear fechas para FullCalendar
-                    start_datetime = datetime.combine(shift.date, shift.start_time)
-                    end_datetime = datetime.combine(shift.date, shift.end_time)
-                    
-                    shifts.append({
-                        'id': shift.id,
-                        'title': f"{employee_name} - {role}",
-                        'start': safe_iso(start_datetime),
-                        'end': safe_iso(end_datetime),
-                        'color': color,
-                        'employee': employee_name,
-                        'shift_type': shift_type_name,
-                        'role': role,
-                        'employee_id': shift.employee.id if shift.employee else None,
-                        'extendedProps': {
-                            'notes': shift.notes or '',
-                            'shift_type_id': shift.shift_type.id if shift.shift_type else None
-                        }
-                    })
+                    if shift.date and shift.start_time and shift.end_time:
+                        start_datetime = datetime.combine(shift.date, shift.start_time)
+                        end_datetime = datetime.combine(shift.date, shift.end_time)
+                        
+                        shifts.append({
+                            'id': shift.id,
+                            'title': f"{employee_name} - {role}",
+                            'start': start_datetime.isoformat(),
+                            'end': end_datetime.isoformat(),
+                            'color': color,
+                            'employee': employee_name,
+                            'shift_type': shift_type_name,
+                            'role': role,
+                            'employee_id': shift.employee.id,
+                            'extendedProps': {
+                                'notes': shift.notes or '',
+                                'shift_type_id': shift.shift_type.id if shift.shift_type else None
+                            }
+                        })
 
                 return Response(shifts)
 
             except Exception as orm_error:
                 logging.error(f"ORM error in ShiftListAPIView: {str(orm_error)}")
                 
-                # Fallback a raw SQL si el ORM falla
+                # Fallback a raw SQL que incluye ambos campos
                 with connection.cursor() as cursor:
                     cursor.execute("""
                         SELECT 
@@ -465,7 +460,7 @@ class ShiftListAPIView(APIView):
                      shift_type_id, notes, shift_type_name, color, 
                      first_name, last_name, puesto, position) = row
                     
-                    employee_name = f"{first_name} {last_name}".strip() if first_name and last_name else "Sin nombre"
+                    employee_name = f"{first_name} {last_name}".strip() if first_name and last_name else f"Empleado {employee_id}"
                     
                     # Priorizar puesto del User, luego position del Employee
                     role = puesto or position or "Sin rol"
@@ -477,8 +472,8 @@ class ShiftListAPIView(APIView):
                         shifts.append({
                             'id': pk,
                             'title': f"{employee_name} - {role}",
-                            'start': safe_iso(start_datetime),
-                            'end': safe_iso(end_datetime),
+                            'start': start_datetime.isoformat(),
+                            'end': end_datetime.isoformat(),
                             'color': color or '#3788d8',
                             'employee': employee_name,
                             'shift_type': shift_type_name or "Sin tipo",
@@ -494,15 +489,21 @@ class ShiftListAPIView(APIView):
                 
         except Exception as exc:
             logging.exception("Error fetching shifts for API")
+            # Para debugging en producción, devolver información útil pero segura
+            error_response = {
+                'error': 'Internal server error while fetching shifts',
+                'detail': 'Contacte al administrador del sistema'
+            }
+            
+            # Solo en DEBUG mostrar detalles completos
             if getattr(settings, 'DEBUG', False):
-                tb = traceback.format_exc()
-                return Response({
-                    'detail': str(exc), 
-                    'traceback': tb
-                }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
-            return Response({
-                'detail': 'Error al obtener turnos'
-            }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+                import traceback
+                error_response['debug_detail'] = str(exc)
+                error_response['traceback'] = traceback.format_exc()
+            
+            return Response(
+                error_response, 
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
 @method_decorator(csrf_exempt, name='dispatch')
