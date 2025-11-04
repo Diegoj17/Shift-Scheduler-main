@@ -273,9 +273,29 @@ class ShiftCreateAPIView(APIView):
 
     def post(self, request, *args, **kwargs):
         try:
+            # Normalize incoming payload: some frontends send a User.id instead of
+            # an Employee.pk. Try to resolve and rewrite `employee` to Employee.pk
+            # before validation to give clearer behaviour.
+            incoming = request.data.copy()
+            emp_val = incoming.get('employee')
+            if emp_val is not None:
+                # try as Employee.pk
+                from .models import Employee as _Employee
+                try:
+                    _Employee.objects.get(pk=int(emp_val))
+                except Exception:
+                    # try as user__pk and rewrite to the employee.pk if found
+                    try:
+                        emp_obj = _Employee.objects.get(user__pk=int(emp_val))
+                        incoming['employee'] = emp_obj.pk
+                        logging.debug("ShiftCreateAPIView: resolved employee user id %s -> employee id %s", emp_val, emp_obj.pk)
+                    except Exception:
+                        # leave as-is; serializer will raise a validation error
+                        logging.debug("ShiftCreateAPIView: could not resolve employee id %s", emp_val)
+
             # pasar contexto no es estrictamente necesario pero es útil si en el
             # futuro queremos usar request.user dentro del serializer
-            serializer = ShiftCreateSerializer(data=request.data, context={'request': request})
+            serializer = ShiftCreateSerializer(data=incoming, context={'request': request})
             if serializer.is_valid():
                 instance = serializer.save()
                 # devolver representación simple
