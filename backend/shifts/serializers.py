@@ -56,7 +56,7 @@ class ShiftSerializer(serializers.ModelSerializer):
 
 class ShiftTypeSerializer(serializers.ModelSerializer):
     class Meta:
-        model = __import__('shifts.models', fromlist=['ShiftType']).ShiftType
+        model = ShiftType
         fields = ('id', 'name', 'start_time', 'end_time', 'color')
         read_only_fields = ('id',)
 
