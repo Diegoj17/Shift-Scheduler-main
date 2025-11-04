@@ -21,6 +21,8 @@ import traceback
 from django.conf import settings
 from django.db import connection
 from django.contrib.auth import get_user_model
+from django.utils.decorators import method_decorator
+from django.views.decorators.csrf import csrf_exempt
 
 
 class ShiftListView(ListView):
@@ -230,6 +232,7 @@ class ShiftTypeDeleteView(DeleteView):
         return super().delete(request, *args, **kwargs)
 
 
+@method_decorator(csrf_exempt, name='dispatch')
 class ShiftTypeListAPIView(APIView):
     """API para listar todos los tipos de turno"""
     authentication_classes = [JWTAuthentication]
@@ -240,6 +243,7 @@ class ShiftTypeListAPIView(APIView):
         serializer = ShiftTypeSerializer(shift_types, many=True)
         return Response(serializer.data)
 
+@method_decorator(csrf_exempt, name='dispatch')
 class ShiftTypeCreateAPIView(APIView):
     """API para crear tipos de turno"""
     authentication_classes = [JWTAuthentication]
@@ -262,6 +266,7 @@ class ShiftTypeCreateAPIView(APIView):
             return Response({'detail': 'Internal server error while creating ShiftType'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
+@method_decorator(csrf_exempt, name='dispatch')
 class ShiftCreateAPIView(APIView):
     """API para crear turnos desde el frontend (JSON).
 
@@ -317,6 +322,7 @@ class ShiftCreateAPIView(APIView):
                 return Response({'detail': str(exc), 'traceback': traceback.format_exc()}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
             return Response({'detail': 'Error al crear turno'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
+@method_decorator(csrf_exempt, name='dispatch')
 class ShiftTypeUpdateAPIView(APIView):
     """API para actualizar tipos de turno"""
     authentication_classes = [JWTAuthentication]
@@ -337,6 +343,7 @@ class ShiftTypeUpdateAPIView(APIView):
             return Response(ShiftTypeSerializer(instance).data)
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
+@method_decorator(csrf_exempt, name='dispatch')
 class ShiftTypeDeleteAPIView(APIView):
     """API para eliminar tipos de turno"""
     authentication_classes = [JWTAuthentication]
@@ -358,6 +365,7 @@ class ShiftTypeDeleteAPIView(APIView):
         )
 
 
+@method_decorator(csrf_exempt, name='dispatch')
 class ShiftListAPIView(APIView):
     """API para devolver turnos en JSON para el calendario del frontend.
 
@@ -464,6 +472,7 @@ class ShiftListAPIView(APIView):
             return Response({'detail': 'Error al obtener turnos'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
+@method_decorator(csrf_exempt, name='dispatch')
 class ShiftUpdateAPIView(APIView):
     """API para actualizar un turno existente."""
     authentication_classes = [JWTAuthentication]
@@ -498,6 +507,7 @@ class ShiftUpdateAPIView(APIView):
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
 
+@method_decorator(csrf_exempt, name='dispatch')
 class ShiftDeleteAPIView(APIView):
     """API para eliminar un turno por pk."""
     authentication_classes = [JWTAuthentication]
@@ -519,6 +529,7 @@ class ShiftDeleteAPIView(APIView):
             return Response({'detail': 'Error al eliminar turno'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
+@method_decorator(csrf_exempt, name='dispatch')
 class ShiftDuplicateAPIView(APIView):
     """API para duplicar turnos desde un rango origen hacia una fecha objetivo.
 
