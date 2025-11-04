@@ -387,17 +387,32 @@ class ShiftListAPIView(APIView):
                         return str(dt)
                 return str(dt)
 
-            # Intentar usar el ORM primero
             try:
-                qs = Shift.objects.select_related('employee', 'shift_type', 'employee__user').all()
+                # Usar ORM con todas las relaciones necesarias
+                qs = Shift.objects.select_related(
+                    'employee', 
+                    'shift_type', 
+                    'employee__user'
+                ).filter(
+                    date__isnull=False,
+                    start_time__isnull=False,
+                    end_time__isnull=False,
+                    employee__isnull=False
+                )
                 
                 for shift in qs:
-                    # Obtener nombre del empleado
-                    employee_name = None
-                    if shift.employee and shift.employee.user:
-                        employee_name = f"{shift.employee.user.first_name} {shift.employee.user.last_name}".strip()
+                    # Obtener información del empleado
+                    employee_name = "Sin nombre"
+                    role = "Sin rol"
                     
-                    # Obtener color del tipo de turno
+                    if shift.employee and shift.employee.user:
+                        user = shift.employee.user
+                        employee_name = f"{user.first_name} {user.last_name}".strip()
+                        # Obtener el rol del campo 'puesto' del User
+                        role = getattr(user, 'puesto', '') or getattr(shift.employee, 'position', 'Sin rol')
+                    
+                    # Obtener información del tipo de turno
+                    shift_type_name = shift.shift_type.name if shift.shift_type else "Sin tipo"
                     color = shift.shift_type.color if shift.shift_type else '#3788d8'
                     
                     # Formatear fechas para FullCalendar
@@ -406,16 +421,16 @@ class ShiftListAPIView(APIView):
                     
                     shifts.append({
                         'id': shift.id,
-                        'title': f"{employee_name} - {shift.role or 'Sin rol'}",
+                        'title': f"{employee_name} - {role}",
                         'start': safe_iso(start_datetime),
                         'end': safe_iso(end_datetime),
                         'color': color,
                         'employee': employee_name,
-                        'shift_type': shift.shift_type.name if shift.shift_type else None,
-                        'role': shift.role,
+                        'shift_type': shift_type_name,
+                        'role': role,
                         'employee_id': shift.employee.id if shift.employee else None,
                         'extendedProps': {
-                            'notes': shift.notes,
+                            'notes': shift.notes or '',
                             'shift_type_id': shift.shift_type.id if shift.shift_type else None
                         }
                     })
@@ -423,26 +438,37 @@ class ShiftListAPIView(APIView):
                 return Response(shifts)
 
             except Exception as orm_error:
-                logging.error(f"ORM error: {str(orm_error)}")
+                logging.error(f"ORM error in ShiftListAPIView: {str(orm_error)}")
+                
                 # Fallback a raw SQL si el ORM falla
                 with connection.cursor() as cursor:
                     cursor.execute("""
-                        SELECT ss.id, ss.date, ss.start_time, ss.end_time, ss.role, 
-                               ss.employee_id, ss.shift_type_id, ss.notes,
-                               st.name as shift_type_name, st.color,
-                               eu.first_name, eu.last_name
+                        SELECT 
+                            ss.id, ss.date, ss.start_time, ss.end_time, 
+                            ss.employee_id, ss.shift_type_id, ss.notes,
+                            st.name as shift_type_name, st.color,
+                            eu.first_name, eu.last_name, eu.puesto,
+                            se.position
                         FROM shifts_shift ss
                         LEFT JOIN shifts_shifttype st ON ss.shift_type_id = st.id
                         LEFT JOIN shifts_employee se ON ss.employee_id = se.id
                         LEFT JOIN users_user eu ON se.user_id = eu.id
+                        WHERE ss.date IS NOT NULL 
+                        AND ss.start_time IS NOT NULL 
+                        AND ss.end_time IS NOT NULL
+                        AND ss.employee_id IS NOT NULL
                     """)
                     rows = cursor.fetchall()
 
                 for row in rows:
-                    (pk, date, start_time, end_time, role, employee_id, 
-                     shift_type_id, notes, shift_type_name, color, first_name, last_name) = row
+                    (pk, date, start_time, end_time, employee_id, 
+                     shift_type_id, notes, shift_type_name, color, 
+                     first_name, last_name, puesto, position) = row
                     
                     employee_name = f"{first_name} {last_name}".strip() if first_name and last_name else "Sin nombre"
+                    
+                    # Priorizar puesto del User, luego position del Employee
+                    role = puesto or position or "Sin rol"
                     
                     if date and start_time and end_time:
                         start_datetime = datetime.combine(date, start_time)
@@ -450,16 +476,16 @@ class ShiftListAPIView(APIView):
                         
                         shifts.append({
                             'id': pk,
-                            'title': f"{employee_name} - {role or 'Sin rol'}",
+                            'title': f"{employee_name} - {role}",
                             'start': safe_iso(start_datetime),
                             'end': safe_iso(end_datetime),
                             'color': color or '#3788d8',
                             'employee': employee_name,
-                            'shift_type': shift_type_name,
+                            'shift_type': shift_type_name or "Sin tipo",
                             'role': role,
                             'employee_id': employee_id,
                             'extendedProps': {
-                                'notes': notes,
+                                'notes': notes or '',
                                 'shift_type_id': shift_type_id
                             }
                         })
@@ -470,8 +496,13 @@ class ShiftListAPIView(APIView):
             logging.exception("Error fetching shifts for API")
             if getattr(settings, 'DEBUG', False):
                 tb = traceback.format_exc()
-                return Response({'detail': str(exc), 'traceback': tb}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
-            return Response({'detail': 'Error al obtener turnos'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+                return Response({
+                    'detail': str(exc), 
+                    'traceback': tb
+                }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+            return Response({
+                'detail': 'Error al obtener turnos'
+            }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
 @method_decorator(csrf_exempt, name='dispatch')
