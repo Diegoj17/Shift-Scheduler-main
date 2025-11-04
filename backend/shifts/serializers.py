@@ -89,20 +89,43 @@ class ShiftCreateSerializer(serializers.Serializer):
             raise serializers.ValidationError("La hora de inicio debe ser anterior a la de fin.")
 
         # validar empleado
-        try:
-            # Accept either Employee.pk or a linked User.pk from the frontend.
-            try:
-                employee = Employee.objects.get(pk=emp_id)
-            except Employee.DoesNotExist:
-                # intentar usar user__pk (frontend podría enviar id de User en lugar de Employee)
-                try:
-                    employee = Employee.objects.get(user__pk=emp_id)
-                except Employee.DoesNotExist:
-                    raise
-        except Employee.DoesNotExist:
-            raise serializers.ValidationError({"employee": "Empleado no encontrado."})
+        employee = None
+        # aceptar varios formatos: int id (Employee.pk), id de User (user__pk),
+        # o dict/obj con 'id'/'pk', o email de usuario.
+        from django.contrib.auth import get_user_model
+        User = get_user_model()
 
-        if not employee.is_active:
+        # extraer un valor usable desde payloads inesperados
+        if isinstance(emp_id, dict):
+            emp_val = emp_id.get('id') or emp_id.get('pk')
+        else:
+            emp_val = emp_id
+
+        # intentar interpretar como entero (pk)
+        emp_int = None
+        try:
+            if emp_val is not None:
+                emp_int = int(emp_val)
+        except (TypeError, ValueError):
+            emp_int = None
+
+        if emp_int is not None:
+            employee = Employee.objects.filter(pk=emp_int).first()
+            if not employee:
+                employee = Employee.objects.filter(user__pk=emp_int).first()
+
+        # si no lo encontramos, intentar buscar por email si nos dieron un string con '@'
+        if not employee and isinstance(emp_val, str) and '@' in emp_val:
+            user = User.objects.filter(email=emp_val).first()
+            if user:
+                employee = Employee.objects.filter(user=user).first()
+
+        if not employee:
+            raise serializers.ValidationError({
+                "employee": f"Empleado no encontrado (valor recibido: {emp_id}). Envíe Employee.id o User.id."
+            })
+
+        if not getattr(employee, 'is_active', True):
             raise serializers.ValidationError({"employee": "Empleado no está activo."})
 
         # verificar solapamiento en la misma fecha
