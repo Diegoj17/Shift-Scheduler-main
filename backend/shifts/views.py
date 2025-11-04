@@ -440,129 +440,129 @@ class ShiftListAPIView(APIView):
             return Response({'detail': 'Error al obtener turnos'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
-    class ShiftUpdateAPIView(APIView):
-        """API para actualizar un turno existente."""
-        authentication_classes = [JWTAuthentication]
-        permission_classes = [permissions.IsAuthenticated]
+class ShiftUpdateAPIView(APIView):
+    """API para actualizar un turno existente."""
+    authentication_classes = [JWTAuthentication]
+    permission_classes = [permissions.IsAuthenticated]
 
-        def put(self, request, pk, *args, **kwargs):
+    def put(self, request, pk, *args, **kwargs):
+        try:
+            shift = Shift.objects.get(pk=pk)
+        except Shift.DoesNotExist:
+            return Response({'error': 'Turno no encontrado'}, status=status.HTTP_404_NOT_FOUND)
+
+        # Reutilizamos el serializer de creación para validar/guardar
+        serializer = ShiftCreateSerializer(shift, data=request.data)
+        if serializer.is_valid():
             try:
-                shift = Shift.objects.get(pk=pk)
-            except Shift.DoesNotExist:
-                return Response({'error': 'Turno no encontrado'}, status=status.HTTP_404_NOT_FOUND)
-
-            # Reutilizamos el serializer de creación para validar/guardar
-            serializer = ShiftCreateSerializer(shift, data=request.data)
-            if serializer.is_valid():
-                try:
-                    instance = serializer.save()
-                    return Response({
-                        'id': instance.id,
-                        'date': instance.date.isoformat() if instance.date else None,
-                        'start_time': instance.start_time.isoformat() if instance.start_time else None,
-                        'end_time': instance.end_time.isoformat() if instance.end_time else None,
-                        'employee_id': getattr(instance.employee, 'id', None),
-                        'shift_type_id': getattr(instance.shift_type, 'id', None),
-                        'notes': instance.notes,
-                    })
-                except Exception as exc:
-                    logging.exception("Unhandled exception updating Shift via API")
-                    if getattr(settings, 'DEBUG', False):
-                        return Response({'detail': str(exc), 'traceback': traceback.format_exc()}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
-                    return Response({'detail': 'Error al actualizar turno'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
-
-            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
-
-
-    class ShiftDeleteAPIView(APIView):
-        """API para eliminar un turno por pk."""
-        authentication_classes = [JWTAuthentication]
-        permission_classes = [permissions.IsAuthenticated]
-
-        def delete(self, request, pk, *args, **kwargs):
-            try:
-                shift = Shift.objects.get(pk=pk)
-            except Shift.DoesNotExist:
-                return Response({'error': 'Turno no encontrado'}, status=status.HTTP_404_NOT_FOUND)
-
-            try:
-                shift.delete()
-                return Response({'message': 'Turno eliminado exitosamente'}, status=status.HTTP_204_NO_CONTENT)
+                instance = serializer.save()
+                return Response({
+                    'id': instance.id,
+                    'date': instance.date.isoformat() if instance.date else None,
+                    'start_time': instance.start_time.isoformat() if instance.start_time else None,
+                    'end_time': instance.end_time.isoformat() if instance.end_time else None,
+                    'employee_id': getattr(instance.employee, 'id', None),
+                    'shift_type_id': getattr(instance.shift_type, 'id', None),
+                    'notes': instance.notes,
+                })
             except Exception as exc:
-                logging.exception("Unhandled exception deleting Shift via API")
+                logging.exception("Unhandled exception updating Shift via API")
                 if getattr(settings, 'DEBUG', False):
                     return Response({'detail': str(exc), 'traceback': traceback.format_exc()}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
-                return Response({'detail': 'Error al eliminar turno'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+                return Response({'detail': 'Error al actualizar turno'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
 
-    class ShiftDuplicateAPIView(APIView):
-        """API para duplicar turnos desde un rango origen hacia una fecha objetivo.
+class ShiftDeleteAPIView(APIView):
+    """API para eliminar un turno por pk."""
+    authentication_classes = [JWTAuthentication]
+    permission_classes = [permissions.IsAuthenticated]
 
-        Espera JSON con: start_date, end_date, target_start_date (formato ISO YYYY-MM-DD).
-        Devuelve conteos y lista de conflictos (si los hay).
-        """
-        authentication_classes = [JWTAuthentication]
-        permission_classes = [permissions.IsAuthenticated]
+    def delete(self, request, pk, *args, **kwargs):
+        try:
+            shift = Shift.objects.get(pk=pk)
+        except Shift.DoesNotExist:
+            return Response({'error': 'Turno no encontrado'}, status=status.HTTP_404_NOT_FOUND)
 
-        def post(self, request, *args, **kwargs):
-            data = request.data
-            try:
-                start_date_str = data.get('start_date')
-                end_date_str = data.get('end_date')
-                target_start_date_str = data.get('target_start_date')
+        try:
+            shift.delete()
+            return Response({'message': 'Turno eliminado exitosamente'}, status=status.HTTP_204_NO_CONTENT)
+        except Exception as exc:
+            logging.exception("Unhandled exception deleting Shift via API")
+            if getattr(settings, 'DEBUG', False):
+                return Response({'detail': str(exc), 'traceback': traceback.format_exc()}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+            return Response({'detail': 'Error al eliminar turno'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
-                if not (start_date_str and end_date_str and target_start_date_str):
-                    return Response({'error': 'start_date, end_date y target_start_date son requeridos'}, status=status.HTTP_400_BAD_REQUEST)
 
-                start_date = datetime.fromisoformat(start_date_str).date()
-                end_date = datetime.fromisoformat(end_date_str).date()
-                target_start_date = datetime.fromisoformat(target_start_date_str).date()
+class ShiftDuplicateAPIView(APIView):
+    """API para duplicar turnos desde un rango origen hacia una fecha objetivo.
 
-            except Exception as exc:
-                return Response({'error': 'Formato de fecha inválido, usar YYYY-MM-DD'}, status=status.HTTP_400_BAD_REQUEST)
+    Espera JSON con: start_date, end_date, target_start_date (formato ISO YYYY-MM-DD).
+    Devuelve conteos y lista de conflictos (si los hay).
+    """
+    authentication_classes = [JWTAuthentication]
+    permission_classes = [permissions.IsAuthenticated]
 
-            day_difference = (target_start_date - start_date).days
+    def post(self, request, *args, **kwargs):
+        data = request.data
+        try:
+            start_date_str = data.get('start_date')
+            end_date_str = data.get('end_date')
+            target_start_date_str = data.get('target_start_date')
 
-            source_shifts = Shift.objects.filter(date__range=[start_date, end_date]).select_related('employee', 'shift_type')
+            if not (start_date_str and end_date_str and target_start_date_str):
+                return Response({'error': 'start_date, end_date y target_start_date son requeridos'}, status=status.HTTP_400_BAD_REQUEST)
 
-            created_count = 0
-            conflict_count = 0
-            conflicts = []
+            start_date = datetime.fromisoformat(start_date_str).date()
+            end_date = datetime.fromisoformat(end_date_str).date()
+            target_start_date = datetime.fromisoformat(target_start_date_str).date()
 
-            with transaction.atomic():
-                for source_shift in source_shifts:
-                    new_date = source_shift.date + timedelta(days=day_difference)
+        except Exception as exc:
+            return Response({'error': 'Formato de fecha inválido, usar YYYY-MM-DD'}, status=status.HTTP_400_BAD_REQUEST)
 
-                    conflicting_shift = Shift.objects.filter(
-                        employee=source_shift.employee,
+        day_difference = (target_start_date - start_date).days
+
+        source_shifts = Shift.objects.filter(date__range=[start_date, end_date]).select_related('employee', 'shift_type')
+
+        created_count = 0
+        conflict_count = 0
+        conflicts = []
+
+        with transaction.atomic():
+            for source_shift in source_shifts:
+                new_date = source_shift.date + timedelta(days=day_difference)
+
+                conflicting_shift = Shift.objects.filter(
+                    employee=source_shift.employee,
+                    date=new_date,
+                    start_time__lt=source_shift.end_time,
+                    end_time__gt=source_shift.start_time
+                ).exists()
+
+                if not conflicting_shift:
+                    Shift.objects.create(
                         date=new_date,
-                        start_time__lt=source_shift.end_time,
-                        end_time__gt=source_shift.start_time
-                    ).exists()
+                        start_time=source_shift.start_time,
+                        end_time=source_shift.end_time,
+                        employee=source_shift.employee,
+                        shift_type=source_shift.shift_type,
+                        notes=source_shift.notes
+                    )
+                    created_count += 1
+                else:
+                    conflict_count += 1
+                    conflicts.append({
+                        'employee_id': getattr(source_shift.employee, 'id', None),
+                        'date': new_date.isoformat(),
+                        'time': f"{source_shift.start_time}-{source_shift.end_time}",
+                    })
 
-                    if not conflicting_shift:
-                        Shift.objects.create(
-                            date=new_date,
-                            start_time=source_shift.start_time,
-                            end_time=source_shift.end_time,
-                            employee=source_shift.employee,
-                            shift_type=source_shift.shift_type,
-                            notes=source_shift.notes
-                        )
-                        created_count += 1
-                    else:
-                        conflict_count += 1
-                        conflicts.append({
-                            'employee_id': getattr(source_shift.employee, 'id', None),
-                            'date': new_date.isoformat(),
-                            'time': f"{source_shift.start_time}-{source_shift.end_time}",
-                        })
+        result = {
+            'created': created_count,
+            'conflicts': conflict_count,
+            'conflict_items': conflicts,
+        }
 
-            result = {
-                'created': created_count,
-                'conflicts': conflict_count,
-                'conflict_items': conflicts,
-            }
-
-            status_code = status.HTTP_201_CREATED if conflict_count == 0 else status.HTTP_207_MULTI_STATUS
-            return Response(result, status=status_code)
+        status_code = status.HTTP_201_CREATED if conflict_count == 0 else status.HTTP_207_MULTI_STATUS
+        return Response(result, status=status_code)
