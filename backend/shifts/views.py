@@ -479,31 +479,43 @@ class ShiftUpdateAPIView(APIView):
     permission_classes = [permissions.IsAuthenticated]
 
     def put(self, request, pk, *args, **kwargs):
+        print(f"🔄 [ShiftUpdateAPIView] Actualizando turno {pk}")
+        print(f"📝 Datos recibidos: {request.data}")
+        
         try:
             shift = Shift.objects.get(pk=pk)
+            print(f"✅ Turno encontrado: ID={shift.pk}, Employee={shift.employee.pk}, Date={shift.date}")
         except Shift.DoesNotExist:
             return Response({'error': 'Turno no encontrado'}, status=status.HTTP_404_NOT_FOUND)
 
-        # Reutilizamos el serializer de creación para validar/guardar
-        serializer = ShiftCreateSerializer(shift, data=request.data)
+        # ✅ Pasar la instancia al serializer para que sepa que es un update
+        serializer = ShiftCreateSerializer(instance=shift, data=request.data)
+        
         if serializer.is_valid():
             try:
                 instance = serializer.save()
+                print(f"✅ Turno actualizado exitosamente: {instance.id}")
+                
                 return Response({
                     'id': instance.id,
                     'date': instance.date.isoformat() if instance.date else None,
                     'start_time': instance.start_time.isoformat() if instance.start_time else None,
                     'end_time': instance.end_time.isoformat() if instance.end_time else None,
-                    'employee_id': getattr(instance.employee, 'id', None),
-                    'shift_type_id': getattr(instance.shift_type, 'id', None),
-                    'notes': instance.notes,
-                })
+                    'employee': getattr(instance.employee, 'id', None),
+                    'shift_type': getattr(instance.shift_type, 'id', None),
+                    'notes': instance.notes or '',
+                }, status=status.HTTP_200_OK)
             except Exception as exc:
-                logging.exception("Unhandled exception updating Shift via API")
+                logging.exception("Error al actualizar turno")
+                print(f"❌ Error al guardar: {exc}")
                 if getattr(settings, 'DEBUG', False):
-                    return Response({'detail': str(exc), 'traceback': traceback.format_exc()}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+                    return Response({
+                        'detail': str(exc), 
+                        'traceback': traceback.format_exc()
+                    }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
                 return Response({'detail': 'Error al actualizar turno'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
+        print(f"❌ Errores de validación: {serializer.errors}")
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
 
