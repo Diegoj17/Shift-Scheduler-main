@@ -273,7 +273,9 @@ class ShiftCreateAPIView(APIView):
 
     def post(self, request, *args, **kwargs):
         try:
-            serializer = ShiftCreateSerializer(data=request.data)
+            # pasar contexto no es estrictamente necesario pero es útil si en el
+            # futuro queremos usar request.user dentro del serializer
+            serializer = ShiftCreateSerializer(data=request.data, context={'request': request})
             if serializer.is_valid():
                 instance = serializer.save()
                 # devolver representación simple
@@ -286,6 +288,8 @@ class ShiftCreateAPIView(APIView):
                     'shift_type_id': getattr(instance.shift_type, 'id', None),
                     'notes': instance.notes,
                 }, status=status.HTTP_201_CREATED)
+            # Loguear detalles para facilitar debugging de 400s desde frontend
+            logging.warning("ShiftCreateAPIView: petición inválida %s -> %s", request.data, serializer.errors)
             return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
         except Exception as exc:
             logging.exception("Unhandled exception creating Shift via API")
