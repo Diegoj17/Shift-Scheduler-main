@@ -367,109 +367,143 @@ class ShiftTypeDeleteAPIView(APIView):
 
 @method_decorator(csrf_exempt, name='dispatch')
 class ShiftListAPIView(APIView):
-    """API para devolver turnos en JSON para el calendario del frontend.
-
-    Usamos una consulta SQL cruda porque el esquema actual en la BD (migra
-    ciones históricas) difiere del modelo en `shifts.models`. Esto evita
-    errores de columna inexistente al serializar con el ORM.
-    """
+    """API para devolver turnos en JSON para el calendario del frontend."""
     authentication_classes = [JWTAuthentication]
     permission_classes = [permissions.IsAuthenticated]
 
     def get(self, request, *args, **kwargs):
         try:
-            User = get_user_model()
             shifts = []
 
-            # Helper para formatear de forma segura
-            def safe_iso(dt):
-                if dt is None:
-                    return None
-                if hasattr(dt, 'isoformat'):
-                    try:
-                        return dt.isoformat()
-                    except Exception:
-                        return str(dt)
-                return str(dt)
-
-            # Intentar usar el ORM primero (camino correcto con migraciones aplicadas)
             try:
-                qs = Shift.objects.all().values(
-                    'id', 'date', 'start_time', 'end_time', 'shift_type_id', 'role', 'employee_id'
+                # Usar ORM con todas las relaciones necesarias
+                qs = Shift.objects.select_related(
+                    'employee', 
+                    'shift_type', 
+                    'employee__user'
+                ).filter(
+                    date__isnull=False,
+                    start_time__isnull=False,
+                    end_time__isnull=False,
+                    employee__isnull=False
                 )
-                for r in qs:
-                    pk = r['id']
-                    date = r.get('date')
-                    start_dt = r.get('start_time')
-                    end_dt = r.get('end_time')
-
-                    shift_type = None
-                    st_id = r.get('shift_type_id')
-                    if st_id:
-                        try:
-                            st_obj = ShiftType.objects.get(pk=st_id)
-                            shift_type = st_obj.name
-                        except Exception:
-                            shift_type = None
-
-                    role_in_shift = r.get('role')
-                    employee_id = r.get('employee_id')
-                    employee_name = None
-
-                    # Obtener nombre del empleado tratando ambos casos posibles
-                    try:
-                        if employee_id is not None:
-                            try:
-                                user = User.objects.get(pk=employee_id)
-                                employee_name = f"{user.first_name} {user.last_name}".strip()
-                            except User.DoesNotExist:
-                                try:
-                                    emp = Employee.objects.get(pk=employee_id)
-                                    if hasattr(emp, 'user') and emp.user is not None:
-                                        employee_name = f"{emp.user.first_name} {emp.user.last_name}".strip()
-                                except Exception:
-                                    employee_name = None
-                    except Exception:
-                        employee_name = None
-
-                    shifts.append({
-                        'id': pk,
-                        'start': safe_iso(datetime.combine(date, start_dt)) if (date and start_dt) else safe_iso(start_dt),
-                        'end': safe_iso(datetime.combine(date, end_dt)) if (date and end_dt) else safe_iso(end_dt),
-                        'shift_type': shift_type if shift_type is not None else None,
-                        'role': role_in_shift if role_in_shift is not None else None,
-                        'employee_id': employee_id,
-                        'employee_name': employee_name,
-                    })
+                
+                for shift in qs:
+                    # Obtener información del empleado
+                    employee_name = "Sin nombre"
+                    role = "Sin rol"
+                    
+                    if shift.employee and shift.employee.user:
+                        user = shift.employee.user
+                        employee_name = f"{user.first_name} {user.last_name}".strip()
+                        
+                        # Obtener el rol: primero de user.puesto, luego de employee.position
+                        role = getattr(user, 'puesto', None) or getattr(shift.employee, 'position', None) or "Sin rol"
+                    
+                    # Si no hay user, usar solo employee
+                    elif shift.employee:
+                        employee_name = f"Empleado {shift.employee.id}"
+                        role = getattr(shift.employee, 'position', 'Sin rol')
+                    
+                    # Obtener información del tipo de turno
+                    shift_type_name = shift.shift_type.name if shift.shift_type else "Sin tipo"
+                    color = shift.shift_type.color if shift.shift_type else '#3788d8'
+                    
+                    # Formatear fechas para FullCalendar
+                    if shift.date and shift.start_time and shift.end_time:
+                        start_datetime = datetime.combine(shift.date, shift.start_time)
+                        end_datetime = datetime.combine(shift.date, shift.end_time)
+                        
+                        shifts.append({
+                            'id': shift.id,
+                            'title': f"{employee_name} - {role}",
+                            'start': start_datetime.isoformat(),
+                            'end': end_datetime.isoformat(),
+                            'color': color,
+                            'employee': employee_name,
+                            'shift_type': shift_type_name,
+                            'role': role,
+                            'employee_id': shift.employee.id,
+                            'extendedProps': {
+                                'notes': shift.notes or '',
+                                'shift_type_id': shift.shift_type.id if shift.shift_type else None
+                            }
+                        })
 
                 return Response(shifts)
 
-            except Exception:
-                # Código legacy para bases de datos con esquema antiguo
+            except Exception as orm_error:
+                logging.error(f"ORM error in ShiftListAPIView: {str(orm_error)}")
+                
+                # Fallback a raw SQL que incluye ambos campos
                 with connection.cursor() as cursor:
-                    cursor.execute("SELECT id, start, end, shift_type, role_in_shift, employee_id FROM shifts_shift")
+                    cursor.execute("""
+                        SELECT 
+                            ss.id, ss.date, ss.start_time, ss.end_time, 
+                            ss.employee_id, ss.shift_type_id, ss.notes,
+                            st.name as shift_type_name, st.color,
+                            eu.first_name, eu.last_name, eu.puesto,
+                            se.position
+                        FROM shifts_shift ss
+                        LEFT JOIN shifts_shifttype st ON ss.shift_type_id = st.id
+                        LEFT JOIN shifts_employee se ON ss.employee_id = se.id
+                        LEFT JOIN users_user eu ON se.user_id = eu.id
+                        WHERE ss.date IS NOT NULL 
+                        AND ss.start_time IS NOT NULL 
+                        AND ss.end_time IS NOT NULL
+                        AND ss.employee_id IS NOT NULL
+                    """)
                     rows = cursor.fetchall()
 
                 for row in rows:
-                    pk, start_dt, end_dt, shift_type, role_in_shift, employee_id = row
-                    shifts.append({
-                        'id': pk,
-                        'start': safe_iso(start_dt),
-                        'end': safe_iso(end_dt),
-                        'shift_type': shift_type,
-                        'role': role_in_shift,
-                        'employee_id': employee_id,
-                        'employee_name': None,
-                    })
+                    (pk, date, start_time, end_time, employee_id, 
+                     shift_type_id, notes, shift_type_name, color, 
+                     first_name, last_name, puesto, position) = row
+                    
+                    employee_name = f"{first_name} {last_name}".strip() if first_name and last_name else f"Empleado {employee_id}"
+                    
+                    # Priorizar puesto del User, luego position del Employee
+                    role = puesto or position or "Sin rol"
+                    
+                    if date and start_time and end_time:
+                        start_datetime = datetime.combine(date, start_time)
+                        end_datetime = datetime.combine(date, end_time)
+                        
+                        shifts.append({
+                            'id': pk,
+                            'title': f"{employee_name} - {role}",
+                            'start': start_datetime.isoformat(),
+                            'end': end_datetime.isoformat(),
+                            'color': color or '#3788d8',
+                            'employee': employee_name,
+                            'shift_type': shift_type_name or "Sin tipo",
+                            'role': role,
+                            'employee_id': employee_id,
+                            'extendedProps': {
+                                'notes': notes or '',
+                                'shift_type_id': shift_type_id
+                            }
+                        })
 
                 return Response(shifts)
+                
         except Exception as exc:
             logging.exception("Error fetching shifts for API")
-            # In DEBUG return detailed traceback to help debugging; in production return generic message
+            # Para debugging en producción, devolver información útil pero segura
+            error_response = {
+                'error': 'Internal server error while fetching shifts',
+                'detail': 'Contacte al administrador del sistema'
+            }
+            
+            # Solo en DEBUG mostrar detalles completos
             if getattr(settings, 'DEBUG', False):
-                tb = traceback.format_exc()
-                return Response({'detail': str(exc), 'traceback': tb}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
-            return Response({'detail': 'Error al obtener turnos'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+                import traceback
+                error_response['debug_detail'] = str(exc)
+                error_response['traceback'] = traceback.format_exc()
+            
+            return Response(
+                error_response, 
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
 @method_decorator(csrf_exempt, name='dispatch')
