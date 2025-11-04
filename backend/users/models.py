@@ -2,6 +2,9 @@ from django.contrib.auth.models import AbstractUser, BaseUserManager
 from django.db import models
 from django.db.models.signals import pre_save, post_save
 from django.dispatch import receiver
+from django.utils import timezone
+from datetime import timedelta
+import uuid
 
 
 
@@ -145,3 +148,36 @@ def _user_save_with_perm_sync(self, *args, **kwargs):
 # Conectamos la función como método en la clase User de forma segura
 _orig_user_save = User.save
 User.save = _user_save_with_perm_sync
+
+
+class PasswordResetToken(models.Model):
+    """Token persistente para restablecimiento de contraseña.
+
+    Ventajas:
+    - Permite revocar tokens (marcar usados)
+    - Se puede auditar y depurar más fácilmente en producción
+    - Soporta expiración explícita
+    """
+    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='password_reset_tokens')
+    token = models.CharField(max_length=128, unique=True, db_index=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    expires_at = models.DateTimeField()
+    used = models.BooleanField(default=False)
+
+    class Meta:
+        db_table = 'users_passwordresettoken'
+        ordering = ['-created_at']
+
+    def is_expired(self):
+        return timezone.now() >= self.expires_at
+
+    @classmethod
+    def create_token_for_user(cls, user, ttl_seconds=3600):
+        token = uuid.uuid4().hex + uuid.uuid4().hex  # 64 chars
+        now = timezone.now()
+        expires = now + timedelta(seconds=ttl_seconds)
+        return cls.objects.create(user=user, token=token, expires_at=expires)
+
+    def mark_used(self):
+        self.used = True
+        self.save(update_fields=['used'])

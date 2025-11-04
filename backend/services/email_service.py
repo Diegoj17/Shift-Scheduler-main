@@ -18,12 +18,18 @@ class EmailService:
         self.frontend_url = os.environ.get('FRONTEND_URL', 'https://shiftscheduler1.vercel.app')
         logger.info(f"EmailService inicializado con from_email: {self.from_email}")
     
-    def send_password_reset_email(self, to_email, reset_token, user_name=None):
+    def send_password_reset_email(self, to_email, reset_token, user_name=None, uid=None):
         """
         Envía email de recuperación de contraseña - OPTIMIZADO CONTRA SPAM
         """
         try:
-            reset_url = f"{self.frontend_url}/reset-password/confirm?token={reset_token}"
+            # Prefer frontend-specific PASSWORD_RESET_CONFIRM_FRONTEND_URL if set in env
+            base = os.environ.get('PASSWORD_RESET_CONFIRM_FRONTEND_URL') or self.frontend_url
+
+            if uid:
+                reset_url = f"{base}/reset-password/confirm?uid={uid}&token={reset_token}"
+            else:
+                reset_url = f"{base}/reset-password/confirm?token={reset_token}"
             
             # Plantilla HTML mejorada para deliverability
             html_content = f"""

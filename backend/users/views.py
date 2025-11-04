@@ -27,6 +27,8 @@ from services.email_service import get_email_service, generate_reset_token
 from django.views.decorators.csrf import ensure_csrf_cookie
 from django.utils.decorators import method_decorator
 from django.http import JsonResponse
+from django.utils import timezone
+from .models import PasswordResetToken
 
 
 class RegisterView(APIView):
@@ -87,13 +89,14 @@ class PasswordResetView(APIView):
         # Always return a generic success message for security (do not disclose if email exists).
         # Perform the email send asynchronously to avoid blocking the request and risking
         # a gateway/proxy timeout (which can produce a 502 and no CORS headers).
-        def _send_reset(to_email, user_name, reset_token):
+        def _send_reset(to_email, user_name, reset_token, uid=None):
             try:
                 email_service = get_email_service()
                 success = email_service.send_password_reset_email(
                     to_email=to_email,
                     reset_token=reset_token,
-                    user_name=user_name
+                    user_name=user_name,
+                    uid=uid
                 )
                 if not success:
                     logging.getLogger('users').warning(f"Failed to send password reset email to {to_email}")
@@ -102,17 +105,30 @@ class PasswordResetView(APIView):
 
         try:
             user = User.objects.get(email=email)
-            reset_token = generate_reset_token()
-            # Guardar token en cache con TTL para validación posterior
+            # Prefer DB-backed token (persistent, revocable). Create and store it
             try:
                 timeout = getattr(settings, 'PASSWORD_RESET_TIMEOUT', 3600)
-                cache_key = f"password_reset:{reset_token}"
-                cache.set(cache_key, str(user.pk), timeout)
-                logging.getLogger('users').debug(f"Stored password reset token in cache for user {user.pk}")
-            except Exception as e:
-                logging.getLogger('users').exception(f"Could not store reset token in cache: {e}")
+                prt = PasswordResetToken.create_token_for_user(user, ttl_seconds=timeout)
+                reset_token = prt.token
+                logging.getLogger('users').debug(f"Created DB password reset token for user {user.pk}")
+            except Exception:
+                # Fallback to cache-based token generation when DB fails
+                reset_token = generate_reset_token()
+                try:
+                    timeout = getattr(settings, 'PASSWORD_RESET_TIMEOUT', 3600)
+                    cache_key = f"password_reset:{reset_token}"
+                    cache.set(cache_key, str(user.pk), timeout)
+                    logging.getLogger('users').debug(f"Stored password reset token in cache for user {user.pk}")
+                except Exception as e:
+                    logging.getLogger('users').exception(f"Could not store reset token in cache: {e}")
             # Dispatch async email sender
-            threading.Thread(target=_send_reset, args=(user.email, user.first_name or user.email, reset_token), daemon=True).start()
+            # Encode uidb64 for frontend consumption (preferred)
+            try:
+                uidb64 = urlsafe_base64_encode(smart_bytes(user.pk))
+            except Exception:
+                uidb64 = None
+
+            threading.Thread(target=_send_reset, args=(user.email, user.first_name or user.email, reset_token, uidb64), daemon=True).start()
         except User.DoesNotExist:
             # Intentionally ignore: we still return the same response below.
             logging.getLogger('users').info(f"Password reset requested for non-existing email: {email}")
@@ -170,9 +186,21 @@ class PasswordResetConfirmView(APIView):
         try:
             token = data.get('token')
             if token:
-                cache_key = f"password_reset:{token}"
-                cache.delete(cache_key)
-                logging.getLogger('users').debug(f"Deleted password reset token from cache: {token}")
+                # Primero intentar eliminar cualquier entrada en cache
+                try:
+                    cache_key = f"password_reset:{token}"
+                    cache.delete(cache_key)
+                except Exception:
+                    pass
+
+                # Marcar como usado en DB si existe
+                try:
+                    prt = PasswordResetToken.objects.filter(token=token, used=False).first()
+                    if prt:
+                        prt.mark_used()
+                        logging.getLogger('users').debug(f"Marked DB password reset token used: {token}")
+                except Exception:
+                    logging.getLogger('users').exception(f"Error marking DB password reset token used: {token}")
         except Exception:
             pass
 
