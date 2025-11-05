@@ -616,9 +616,6 @@ class ShiftDuplicateAPIView(APIView):
     
 @method_decorator(csrf_exempt, name='dispatch')
 class MyShiftsAPIView(APIView):
-    """
-    GET /api/shifts/my/ -> Obtiene solo los turnos del usuario autenticado
-    """
     authentication_classes = [JWTAuthentication]
     permission_classes = [permissions.IsAuthenticated]
 
@@ -627,86 +624,62 @@ class MyShiftsAPIView(APIView):
         logger = logging.getLogger(__name__)
         
         try:
-            logger.info(f"🔍 [MyShiftsAPIView] Usuario autenticado: {request.user.id} - {request.user.email}")
+            user = request.user
+            logger.info(f"🔍 [MyShiftsAPIView] Usuario autenticado: ID={user.id}, Email={user.email}, Username={user.username}")
+            
+            # DEBUG: Listar todos los employees para verificar
+            all_employees = Employee.objects.all().select_related('user')
+            logger.info("📋 Todos los employees en sistema:")
+            for emp in all_employees:
+                logger.info(f"   - Employee {emp.id}: User {emp.user.id} ({emp.user.email}) - {emp.position}")
             
             # Buscar el Employee asociado al usuario
+            employee = None
             try:
-                employee = Employee.objects.get(user=request.user)
-                logger.info(f"✅ [MyShiftsAPIView] Empleado encontrado: {employee.id}")
+                employee = Employee.objects.get(user=user)
+                logger.info(f"✅ [MyShiftsAPIView] Employee encontrado: ID={employee.id}, Position={employee.position}")
+                
+                # Verificar turnos de este employee
+                shifts_count = Shift.objects.filter(employee=employee).count()
+                logger.info(f"📊 [MyShiftsAPIView] Turnos encontrados para employee {employee.id}: {shifts_count}")
+                
+                if shifts_count == 0:
+                    # Verificar si hay turnos en el sistema
+                    total_shifts = Shift.objects.count()
+                    logger.info(f"📈 [MyShiftsAPIView] Total de turnos en sistema: {total_shifts}")
+                    
+                    # Mostrar algunos turnos para debug
+                    some_shifts = Shift.objects.select_related('employee', 'employee__user')[:5]
+                    for shift in some_shifts:
+                        logger.info(f"   - Turno {shift.id}: Employee {shift.employee.id} (User {shift.employee.user.id}) - {shift.date}")
+                
+                # Construir y devolver los turnos del employee (aunque haya 0, devolvemos la lista)
+                shifts_qs = Shift.objects.filter(employee=employee).select_related('shift_type').order_by('date', 'start_time')
+                results = []
+                for s in shifts_qs:
+                    results.append({
+                        'id': s.id,
+                        'date': s.date.isoformat() if s.date else None,
+                        'start_time': s.start_time.isoformat() if s.start_time else None,
+                        'end_time': s.end_time.isoformat() if s.end_time else None,
+                        'shift_type': getattr(s.shift_type, 'name', None),
+                        'notes': s.notes or '',
+                    })
+                return Response({'results': results}, status=status.HTTP_200_OK)
+                
             except Employee.DoesNotExist:
-                logger.warning(f"⚠️ [MyShiftsAPIView] No se encontró empleado para usuario: {request.user.id}")
+                logger.error(f"❌ [MyShiftsAPIView] NO existe Employee para usuario {user.id}")
                 return Response({
                     'results': [],
                     'message': 'No se encontró registro de empleado para este usuario'
                 }, status=status.HTTP_200_OK)
-            
-            # Obtener parámetros de filtro opcionales
-            start_date = request.query_params.get('start_date')
-            end_date = request.query_params.get('end_date')
-            logger.info(f"📅 [MyShiftsAPIView] Filtros - start_date: {start_date}, end_date: {end_date}")
-            
-            # Filtrar turnos del empleado
-            queryset = Shift.objects.filter(employee=employee).select_related(
-                'shift_type', 'employee__user'
-            ).order_by('date', 'start_time')
-            
-            logger.info(f"📊 [MyShiftsAPIView] Query inicial: {queryset.count()} turnos")
-            
-            # Aplicar filtros de fecha si se proporcionan
-            if start_date:
-                try:
-                    start_date_obj = datetime.fromisoformat(start_date).date()
-                    queryset = queryset.filter(date__gte=start_date_obj)
-                    logger.info(f"✅ [MyShiftsAPIView] Filtro start_date aplicado: {start_date_obj}")
-                except Exception as e:
-                    logger.error(f"❌ [MyShiftsAPIView] Error parseando start_date: {e}")
-                    pass
-            
-            if end_date:
-                try:
-                    end_date_obj = datetime.fromisoformat(end_date).date()
-                    queryset = queryset.filter(date__lte=end_date_obj)
-                    logger.info(f"✅ [MyShiftsAPIView] Filtro end_date aplicado: {end_date_obj}")
-                except Exception as e:
-                    logger.error(f"❌ [MyShiftsAPIView] Error parseando end_date: {e}")
-                    pass
-            
-            logger.info(f"📊 [MyShiftsAPIView] Query final: {queryset.count()} turnos")
-            
-            # Serializar y devolver
-            shifts = []
-            for shift in queryset:
-                try:
-                    user_obj = shift.employee.user
-                    employee_name = f"{user_obj.first_name or ''} {user_obj.last_name or ''}".strip() or user_obj.email
-                    
-                    shift_data = {
-                        'id': shift.id,
-                        'date': shift.date.isoformat() if shift.date else None,
-                        'start_time': shift.start_time.isoformat() if shift.start_time else None,
-                        'end_time': shift.end_time.isoformat() if shift.end_time else None,
-                        'start': f"{shift.date}T{shift.start_time}" if shift.date and shift.start_time else None,
-                        'end': f"{shift.date}T{shift.end_time}" if shift.date and shift.end_time else None,
-                        'employee': shift.employee.id,
-                        'employee_name': employee_name,
-                        'shift_type': shift.shift_type.id if shift.shift_type else None,
-                        'shift_type_name': shift.shift_type.name if shift.shift_type else None,
-                        'shift_type_color': shift.shift_type.color if shift.shift_type else None,
-                        'role_in_shift': shift.role_in_shift or '',
-                        'notes': shift.notes or '',
-                        'status': 'confirmed'
-                    }
-                    shifts.append(shift_data)
-                except Exception as e:
-                    logger.error(f"❌ [MyShiftsAPIView] Error serializando turno {shift.id}: {e}")
-                    continue
-            
-            logger.info(f"✅ [MyShiftsAPIView] Retornando {len(shifts)} turnos")
-            return Response({'results': shifts}, status=status.HTTP_200_OK)
-            
-        except Exception as e:
-            logger.error(f"💥 [MyShiftsAPIView] Error crítico: {str(e)}", exc_info=True)
-            return Response(
-                {'error': 'Error interno del servidor', 'details': str(e)},
-                status=status.HTTP_500_INTERNAL_SERVER_ERROR
-            )
+        except Exception as exc:
+            logger.exception("💥 [MyShiftsAPIView] Error inesperado al obtener turnos")
+            # En DEBUG podríamos retornar más info, pero en producción devolver mensaje genérico
+            if getattr(settings, 'DEBUG', False):
+                return Response({
+                    'results': [],
+                    'error': str(exc),
+                    'traceback': traceback.format_exc()
+                }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+            return Response({'results': [], 'error': 'Error interno del servidor'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
