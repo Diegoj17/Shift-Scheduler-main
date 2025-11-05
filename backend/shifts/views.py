@@ -654,17 +654,34 @@ class MyShiftsAPIView(APIView):
                         logger.info(f"   - Turno {shift.id}: Employee {shift.employee.id} (User {shift.employee.user.id}) - {shift.date}")
                 
                 # Construir y devolver los turnos del employee (aunque haya 0, devolvemos la lista)
-                shifts_qs = Shift.objects.filter(employee=employee).select_related('shift_type').order_by('date', 'start_time')
+                shifts_qs = Shift.objects.filter(employee=employee).select_related('shift_type', 'employee').order_by('date', 'start_time')
                 results = []
                 for s in shifts_qs:
+                    # Obtener información del empleado
+                    employee_position = s.employee.position if s.employee else None
+                    user_obj = s.employee.user if s.employee else None
+                    employee_name = f"{user_obj.first_name or ''} {user_obj.last_name or ''}".strip() if user_obj else None
+                    
                     results.append({
                         'id': s.id,
                         'date': s.date.isoformat() if s.date else None,
                         'start_time': s.start_time.isoformat() if s.start_time else None,
                         'end_time': s.end_time.isoformat() if s.end_time else None,
-                        'shift_type': getattr(s.shift_type, 'name', None),
+                        'start': f"{s.date}T{s.start_time}" if s.date and s.start_time else None,
+                        'end': f"{s.date}T{s.end_time}" if s.date and s.end_time else None,
+                        'employee': s.employee.id,
+                        'employee_name': employee_name,
+                        'employee_position': employee_position,  
+                        'shift_type': s.shift_type.id if s.shift_type else None,
+                        'shift_type_name': getattr(s.shift_type, 'name', None),
+                        'shift_type_color': getattr(s.shift_type, 'color', None),
                         'notes': s.notes or '',
+                        'status': 'confirmed'
                     })
+                    
+                    logger.info(f"📋 Turno {s.id}: Position={employee_position}, ShiftType={getattr(s.shift_type, 'name', None)}")
+                
+                logger.info(f"✅ [MyShiftsAPIView] Retornando {len(results)} turnos con información de posición")
                 return Response({'results': results}, status=status.HTTP_200_OK)
                 
             except Employee.DoesNotExist:
@@ -675,7 +692,6 @@ class MyShiftsAPIView(APIView):
                 }, status=status.HTTP_200_OK)
         except Exception as exc:
             logger.exception("💥 [MyShiftsAPIView] Error inesperado al obtener turnos")
-            # En DEBUG podríamos retornar más info, pero en producción devolver mensaje genérico
             if getattr(settings, 'DEBUG', False):
                 return Response({
                     'results': [],
