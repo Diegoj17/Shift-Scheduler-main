@@ -618,70 +618,95 @@ class ShiftDuplicateAPIView(APIView):
 class MyShiftsAPIView(APIView):
     """
     GET /api/shifts/my/ -> Obtiene solo los turnos del usuario autenticado
-    Usado por empleados para ver su calendario personal
     """
     authentication_classes = [JWTAuthentication]
     permission_classes = [permissions.IsAuthenticated]
 
     def get(self, request, *args, **kwargs):
-        from .models import Employee
+        import logging
+        logger = logging.getLogger(__name__)
         
-        user = request.user
-        
-        # Buscar el Employee asociado al usuario
         try:
-            employee = Employee.objects.get(user=user)
-        except Employee.DoesNotExist:
-            return Response({
-                'results': [],
-                'message': 'No se encontró registro de empleado para este usuario'
-            }, status=status.HTTP_200_OK)
-        
-        # Obtener parámetros de filtro opcionales
-        start_date = request.query_params.get('start_date')
-        end_date = request.query_params.get('end_date')
-        
-        # Filtrar turnos del empleado
-        queryset = Shift.objects.filter(employee=employee).select_related(
-            'shift_type', 'employee__user'
-        ).order_by('date', 'start_time')
-        
-        # Aplicar filtros de fecha si se proporcionan
-        if start_date:
-            try:
-                start_date_obj = datetime.fromisoformat(start_date).date()
-                queryset = queryset.filter(date__gte=start_date_obj)
-            except:
-                pass
-        
-        if end_date:
-            try:
-                end_date_obj = datetime.fromisoformat(end_date).date()
-                queryset = queryset.filter(date__lte=end_date_obj)
-            except:
-                pass
-        
-        # Serializar y devolver
-        shifts = []
-        for shift in queryset:
-            user_obj = shift.employee.user
-            employee_name = f"{user_obj.first_name or ''} {user_obj.last_name or ''}".strip() or user_obj.email
+            logger.info(f"🔍 [MyShiftsAPIView] Usuario autenticado: {request.user.id} - {request.user.email}")
             
-            shifts.append({
-                'id': shift.id,
-                'date': shift.date.isoformat() if shift.date else None,
-                'start_time': shift.start_time.isoformat() if shift.start_time else None,
-                'end_time': shift.end_time.isoformat() if shift.end_time else None,
-                'start': f"{shift.date}T{shift.start_time}" if shift.date and shift.start_time else None,
-                'end': f"{shift.date}T{shift.end_time}" if shift.date and shift.end_time else None,
-                'employee': shift.employee.id,
-                'employee_name': employee_name,
-                'shift_type': shift.shift_type.id if shift.shift_type else None,
-                'shift_type_name': shift.shift_type.name if shift.shift_type else None,
-                'shift_type_color': shift.shift_type.color if shift.shift_type else None,
-                'role_in_shift': shift.role_in_shift or '',
-                'notes': shift.notes or '',
-                'status': 'confirmed'  # Puedes agregar lógica de estado si la tienes
-            })
-        
-        return Response({'results': shifts}, status=status.HTTP_200_OK)
+            # Buscar el Employee asociado al usuario
+            try:
+                employee = Employee.objects.get(user=request.user)
+                logger.info(f"✅ [MyShiftsAPIView] Empleado encontrado: {employee.id}")
+            except Employee.DoesNotExist:
+                logger.warning(f"⚠️ [MyShiftsAPIView] No se encontró empleado para usuario: {request.user.id}")
+                return Response({
+                    'results': [],
+                    'message': 'No se encontró registro de empleado para este usuario'
+                }, status=status.HTTP_200_OK)
+            
+            # Obtener parámetros de filtro opcionales
+            start_date = request.query_params.get('start_date')
+            end_date = request.query_params.get('end_date')
+            logger.info(f"📅 [MyShiftsAPIView] Filtros - start_date: {start_date}, end_date: {end_date}")
+            
+            # Filtrar turnos del empleado
+            queryset = Shift.objects.filter(employee=employee).select_related(
+                'shift_type', 'employee__user'
+            ).order_by('date', 'start_time')
+            
+            logger.info(f"📊 [MyShiftsAPIView] Query inicial: {queryset.count()} turnos")
+            
+            # Aplicar filtros de fecha si se proporcionan
+            if start_date:
+                try:
+                    start_date_obj = datetime.fromisoformat(start_date).date()
+                    queryset = queryset.filter(date__gte=start_date_obj)
+                    logger.info(f"✅ [MyShiftsAPIView] Filtro start_date aplicado: {start_date_obj}")
+                except Exception as e:
+                    logger.error(f"❌ [MyShiftsAPIView] Error parseando start_date: {e}")
+                    pass
+            
+            if end_date:
+                try:
+                    end_date_obj = datetime.fromisoformat(end_date).date()
+                    queryset = queryset.filter(date__lte=end_date_obj)
+                    logger.info(f"✅ [MyShiftsAPIView] Filtro end_date aplicado: {end_date_obj}")
+                except Exception as e:
+                    logger.error(f"❌ [MyShiftsAPIView] Error parseando end_date: {e}")
+                    pass
+            
+            logger.info(f"📊 [MyShiftsAPIView] Query final: {queryset.count()} turnos")
+            
+            # Serializar y devolver
+            shifts = []
+            for shift in queryset:
+                try:
+                    user_obj = shift.employee.user
+                    employee_name = f"{user_obj.first_name or ''} {user_obj.last_name or ''}".strip() or user_obj.email
+                    
+                    shift_data = {
+                        'id': shift.id,
+                        'date': shift.date.isoformat() if shift.date else None,
+                        'start_time': shift.start_time.isoformat() if shift.start_time else None,
+                        'end_time': shift.end_time.isoformat() if shift.end_time else None,
+                        'start': f"{shift.date}T{shift.start_time}" if shift.date and shift.start_time else None,
+                        'end': f"{shift.date}T{shift.end_time}" if shift.date and shift.end_time else None,
+                        'employee': shift.employee.id,
+                        'employee_name': employee_name,
+                        'shift_type': shift.shift_type.id if shift.shift_type else None,
+                        'shift_type_name': shift.shift_type.name if shift.shift_type else None,
+                        'shift_type_color': shift.shift_type.color if shift.shift_type else None,
+                        'role_in_shift': shift.role_in_shift or '',
+                        'notes': shift.notes or '',
+                        'status': 'confirmed'
+                    }
+                    shifts.append(shift_data)
+                except Exception as e:
+                    logger.error(f"❌ [MyShiftsAPIView] Error serializando turno {shift.id}: {e}")
+                    continue
+            
+            logger.info(f"✅ [MyShiftsAPIView] Retornando {len(shifts)} turnos")
+            return Response({'results': shifts}, status=status.HTTP_200_OK)
+            
+        except Exception as e:
+            logger.error(f"💥 [MyShiftsAPIView] Error crítico: {str(e)}", exc_info=True)
+            return Response(
+                {'error': 'Error interno del servidor', 'details': str(e)},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
