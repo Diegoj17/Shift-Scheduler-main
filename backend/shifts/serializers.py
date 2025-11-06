@@ -74,91 +74,69 @@ class ShiftCreateSerializer(serializers.Serializer):
     employee = serializers.IntegerField()  # ✅ Esto debe ser el EMPLOYEE_ID, no USER_ID
     shift_type = serializers.IntegerField()
     notes = serializers.CharField(allow_blank=True, required=False)
-
-    def _get_employee(self, emp_id):
-        """
-        Obtiene el Employee BASADO EN EL EMPLOYEE_ID
-        """
-        import logging
-        logger = logging.getLogger(__name__)
-        logger.info(f"🔍 [ShiftCreateSerializer] Buscando Employee para ID: {emp_id}")
-        
-        try:
-            # ✅ BUSCAR DIRECTAMENTE POR EMPLOYEE ID
-            employee = Employee.objects.get(pk=emp_id)
-            logger.info(f"✅ [ShiftCreateSerializer] Employee encontrado: ID={employee.id}, User={employee.user.id}, Nombre={employee.user.get_full_name()}")
-            
-            # ✅ VERIFICAR QUE TENGA USER ASOCIADO
-            if not employee.user:
-                logger.error(f"❌ Employee {emp_id} no tiene usuario asociado")
-                raise serializers.ValidationError({
-                    "employee": f"El empleado {emp_id} no tiene usuario asociado"
-                })
-                
-            # ✅ VERIFICAR QUE ESTÉ ACTIVO
-            if not getattr(employee, 'is_active', True):
-                logger.warning(f"⚠️ Employee {emp_id} no está activo")
-                raise serializers.ValidationError({
-                    "employee": f"El empleado {employee.user.get_full_name()} no está activo"
-                })
-                
-            return employee
-            
-        except Employee.DoesNotExist:
-            logger.error(f"❌ [ShiftCreateSerializer] Employee {emp_id} no encontrado")
-            raise serializers.ValidationError({
-                "employee": f"Empleado con ID {emp_id} no encontrado"
-            })
-        except Exception as e:
-            logger.exception(f"❌ [ShiftCreateSerializer] Error inesperado: {e}")
-            raise serializers.ValidationError({
-                "employee": f"Error al procesar empleado: {str(e)}"
-            })
-
     def validate(self, data):
+        from .models import Employee, Shift, ShiftType
+        from django.core.exceptions import ValidationError
+        from django.contrib.auth import get_user_model
+        from datetime import timedelta
+        User = get_user_model()
+
         date = data.get('date')
         start_time = data.get('start_time')
         end_time = data.get('end_time')
-        emp_id = data.get('employee')  # ✅ Este debe ser EMPLOYEE_ID
-        
-        logger.info(f"🔍 [ShiftCreateSerializer] Validando turno - Employee ID: {emp_id}")
-        
-        # ✅ OBTENER EMPLOYEE
-        try:
-            employee = self._get_employee(emp_id)
-        except serializers.ValidationError as ve:
-            # Re-lanzar la validación específica de employee
-            raise ve
-        except Exception as e:
-            logger.exception(f"❌ Error inesperado obteniendo empleado: {e}")
-            raise serializers.ValidationError({
-                "employee": f"Error al procesar empleado: {str(e)}"
-            })
+        emp_id = data.get('employee')
 
-        # ✅ RESTANTE DE LA VALIDACIÓN (igual que antes)
+        # ✅ CORREGIDO: Permitir turnos nocturnos
         is_overnight_shift = end_time < start_time
         
         if not is_overnight_shift and start_time >= end_time:
             raise serializers.ValidationError("La hora de inicio debe ser anterior a la de fin para turnos diurnos.")
 
-        # Verificar duplicados EXACTOS
-        exact_duplicate = Shift.objects.filter(
-            employee=employee,
-            date=date,
-            start_time=start_time,
-            end_time=end_time
-        )
+        # Validar empleado
+        employee = None
         
-        if self.instance:
-            exact_duplicate = exact_duplicate.exclude(pk=self.instance.pk)
-        
-        if exact_duplicate.exists():
-            dup = exact_duplicate.first()
+        if isinstance(emp_id, dict):
+            emp_val = emp_id.get('id') or emp_id.get('pk')
+        else:
+            emp_val = emp_id
+
+        emp_int = None
+        try:
+            if emp_val is not None:
+                emp_int = int(emp_val)
+        except (TypeError, ValueError):
+            emp_int = None
+
+        if emp_int is not None:
+            employee = Employee.objects.filter(pk=emp_int).first()
+            if not employee:
+                employee = Employee.objects.filter(user__pk=emp_int).first()
+                if not employee:
+                    try:
+                        user_tmp = User.objects.filter(pk=emp_int).first()
+                        if user_tmp:
+                            employee = Employee.objects.create(
+                                user=user_tmp,
+                                position=getattr(user_tmp, 'puesto', '') or 'Desconocido',
+                                is_active=True
+                            )
+                    except Exception:
+                        employee = None
+
+        if not employee and isinstance(emp_val, str) and '@' in emp_val:
+            user = User.objects.filter(email=emp_val).first()
+            if user:
+                employee = Employee.objects.filter(user=user).first()
+
+        if not employee:
             raise serializers.ValidationError({
-                "detail": f"Ya existe un turno idéntico (ID={dup.id}) para este empleado"
+                "employee": f"Empleado no encontrado (valor recibido: {emp_id}). Envíe Employee.id o User.id."
             })
 
-        # Verificar solapamiento
+        if not getattr(employee, 'is_active', True):
+            raise serializers.ValidationError({"employee": "Empleado no está activo."})
+
+        # ✅ CRÍTICO: Verificar solapamiento - LÓGICA MEJORADA PARA TURNOS NOCTURNOS
         if is_overnight_shift:
             conflicts_same_day = Shift.objects.filter(
                 employee=employee,
@@ -175,11 +153,8 @@ class ShiftCreateSerializer(serializers.Serializer):
                 end_time__gt='00:00:00'
             )
             
-            if self.instance:
-                conflicts_same_day = conflicts_same_day.exclude(pk=self.instance.pk)
-                conflicts_next_day = conflicts_next_day.exclude(pk=self.instance.pk)
-            
             conflicts = conflicts_same_day.union(conflicts_next_day)
+            
         else:
             conflicts = Shift.objects.filter(
                 employee=employee,
@@ -187,9 +162,10 @@ class ShiftCreateSerializer(serializers.Serializer):
                 start_time__lt=end_time,
                 end_time__gt=start_time
             )
-            
-            if self.instance:
-                conflicts = conflicts.exclude(pk=self.instance.pk)
+        
+        if self.instance:
+            conflicts = conflicts.exclude(pk=self.instance.pk)
+            print(f"🔄 [ShiftCreateSerializer] Actualizando turno {self.instance.pk} - excluyendo de validación")
         
         if conflicts.exists():
             c = conflicts.first()
@@ -197,81 +173,46 @@ class ShiftCreateSerializer(serializers.Serializer):
                 "detail": f"Solapamiento con turno existente: {c.start_time} - {c.end_time} en {c.date}"
             })
 
-        # Validar ShiftType
         try:
-            shift_type = ShiftType.objects.get(pk=data.get('shift_type'))
+            ShiftType.objects.get(pk=data.get('shift_type'))
         except ShiftType.DoesNotExist:
             raise serializers.ValidationError({"shift_type": "Tipo de turno no encontrado."})
 
         data['employee_obj'] = employee
-        data['shift_type_obj'] = shift_type
+        data['shift_type_obj'] = ShiftType.objects.get(pk=data.get('shift_type'))
         data['is_overnight'] = is_overnight_shift
-        
-        logger.info(f"✅ [ShiftCreateSerializer] Validación completada para Employee {employee.id}")
         return data
 
     def create(self, validated_data):
-        """Crea un Shift a partir de los datos validados.
+        from .models import Shift
 
-        Usa `employee_obj` y `shift_type_obj` generados en validate().
-        Asigna `created_by` si existe request.user en el contexto.
-        Convierte errores de Django ValidationError a serializers.ValidationError.
-        """
-        from django.core.exceptions import ValidationError as DjangoValidationError
-
-        employee = validated_data.get('employee_obj')
-        shift_type = validated_data.get('shift_type_obj')
-        date = validated_data.get('date')
-        start_time = validated_data.get('start_time')
-        end_time = validated_data.get('end_time')
-        notes = validated_data.get('notes', '')
-
-        request = self.context.get('request')
-        created_by = None
-        if request and getattr(request, 'user', None) and request.user.is_authenticated:
-            created_by = request.user
-
-        try:
-            shift = Shift.objects.create(
-                date=date,
-                start_time=start_time,
-                end_time=end_time,
-                employee=employee,
-                shift_type=shift_type,
-                notes=notes,
-                **({'created_by': created_by} if created_by else {})
-            )
-            return shift
-        except DjangoValidationError as dve:
-            # Normalizar a ValidationError de DRF
-            detail = getattr(dve, 'message_dict', None) or getattr(dve, 'messages', None) or str(dve)
-            raise serializers.ValidationError(detail)
+        shift = Shift(
+            date=validated_data['date'],
+            start_time=validated_data['start_time'],
+            end_time=validated_data['end_time'],
+            employee=validated_data['employee_obj'],
+            shift_type=validated_data['shift_type_obj'],
+            notes=validated_data.get('notes', '')
+        )
+        shift.full_clean()
+        shift.save()
+        return shift
 
     def update(self, instance, validated_data):
-        """Actualiza un Shift existente con los datos validados.
-
-        Convierte errores de Django ValidationError a serializers.ValidationError.
-        """
-        from django.core.exceptions import ValidationError as DjangoValidationError
-
-        # Obtener objetos preprocesados por validate
-        employee = validated_data.get('employee_obj', None)
-        shift_type = validated_data.get('shift_type_obj', None)
-
-        # Campos simples
+        from .models import Shift
+        
+        print(f"🔄 [ShiftCreateSerializer] Actualizando turno {instance.pk}")
+        print(f"📝 Datos validados: {validated_data}")
+        
         instance.date = validated_data.get('date', instance.date)
         instance.start_time = validated_data.get('start_time', instance.start_time)
         instance.end_time = validated_data.get('end_time', instance.end_time)
-        if employee is not None:
-            instance.employee = employee
-        if shift_type is not None:
-            instance.shift_type = shift_type
+        instance.employee = validated_data.get('employee_obj', instance.employee)
+        instance.shift_type = validated_data.get('shift_type_obj', instance.shift_type)
         instance.notes = validated_data.get('notes', instance.notes)
-
-        try:
-            instance.full_clean()
-            instance.save()
-            return instance
-        except DjangoValidationError as dve:
-            detail = getattr(dve, 'message_dict', None) or getattr(dve, 'messages', None) or str(dve)
-            raise serializers.ValidationError(detail)
+        
+        instance.full_clean()
+        instance.save()
+        
+        print(f"✅ Turno {instance.pk} actualizado exitosamente")
+        return instance
