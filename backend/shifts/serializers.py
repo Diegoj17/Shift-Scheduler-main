@@ -137,6 +137,7 @@ class ShiftCreateSerializer(serializers.Serializer):
 
         # ✅ CRÍTICO: Verificar solapamiento - LÓGICA MEJORADA PARA TURNOS NOCTURNOS
         if is_overnight_shift:
+            # ✅ EXCLUIR ANTES DEL UNION
             conflicts_same_day = Shift.objects.filter(
                 employee=employee,
                 date=date,
@@ -152,19 +153,28 @@ class ShiftCreateSerializer(serializers.Serializer):
                 end_time__gt='00:00:00'
             )
             
+            # ✅ EXCLUIR EL TURNO ACTUAL ANTES DEL UNION (si es UPDATE)
+            if self.instance:
+                conflicts_same_day = conflicts_same_day.exclude(pk=self.instance.pk)
+                conflicts_next_day = conflicts_next_day.exclude(pk=self.instance.pk)
+                print(f"🔄 [ShiftCreateSerializer] Actualizando turno nocturno {self.instance.pk} - excluyendo de validación")
+            
+            # Ahora sí, hacer el union
             conflicts = conflicts_same_day.union(conflicts_next_day)
             
         else:
+            # Turnos diurnos (mismo día)
             conflicts = Shift.objects.filter(
                 employee=employee,
                 date=date,
                 start_time__lt=end_time,
                 end_time__gt=start_time
             )
-        
-        if self.instance:
-            conflicts = conflicts.exclude(pk=self.instance.pk)
-            print(f"🔄 [ShiftCreateSerializer] Actualizando turno {self.instance.pk} - excluyendo de validación")
+            
+            # ✅ EXCLUIR EL TURNO ACTUAL (si es UPDATE)
+            if self.instance:
+                conflicts = conflicts.exclude(pk=self.instance.pk)
+                print(f"🔄 [ShiftCreateSerializer] Actualizando turno diurno {self.instance.pk} - excluyendo de validación")
         
         if conflicts.exists():
             c = conflicts.first()
