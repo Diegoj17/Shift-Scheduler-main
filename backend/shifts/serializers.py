@@ -1,7 +1,6 @@
 from rest_framework import serializers
 from django.utils import timezone
-from .models import Shift
-from .models import ShiftType
+from .models import Shift, ShiftType, Employee
 from django.contrib.auth import get_user_model
 
 User = get_user_model()
@@ -24,20 +23,16 @@ class ShiftSerializer(serializers.ModelSerializer):
         if start >= end:
             raise serializers.ValidationError("La fecha/hora de inicio debe ser anterior a la de fin.")
 
-        # Verificar solapamiento: existen shifts con start < end_new y end > start_new
         qs = Shift.objects.filter(employee=employee, start__lt=end, end__gt=start)
-        # Excluir la instancia actual en actualizaciones
         if self.instance:
             qs = qs.exclude(pk=self.instance.pk)
 
         if qs.exists():
-            # Devolver detalle del conflicto
             conflict = qs.first()
             raise serializers.ValidationError({
                 "conflict": f"Solapamiento con turno existente {conflict.start.isoformat()} - {conflict.end.isoformat()}"
             })
 
-        # Rechazar si empleado no está activo
         try:
             emp = User.objects.get(pk=employee.pk if hasattr(employee, 'pk') else employee)
             if emp.status != User.Status.ACTIVE:
@@ -65,12 +60,8 @@ class ShiftTypeSerializer(serializers.ModelSerializer):
         end = data.get('end_time')
         
         if start and end:
-            # Permitir turnos nocturnos (cuando end < start)
-            # Esto significa que el turno cruza la medianoche
             if start == end:
                 raise serializers.ValidationError("La hora de inicio y fin no pueden ser iguales")
-            # No hacemos validación de start < end porque los turnos nocturnos son válidos
-        
         return data
 
 
@@ -94,8 +85,7 @@ class ShiftCreateSerializer(serializers.Serializer):
         end_time = data.get('end_time')
         emp_id = data.get('employee')
 
-        # ✅ CORREGIDO: Permitir turnos nocturnos (cuando end_time < start_time)
-        # Esto significa que el turno cruza la medianoche
+        # ✅ CORREGIDO: Permitir turnos nocturnos
         is_overnight_shift = end_time < start_time
         
         if not is_overnight_shift and start_time >= end_time:
@@ -104,13 +94,11 @@ class ShiftCreateSerializer(serializers.Serializer):
         # Validar empleado
         employee = None
         
-        # Extraer valor del empleado
         if isinstance(emp_id, dict):
             emp_val = emp_id.get('id') or emp_id.get('pk')
         else:
             emp_val = emp_id
 
-        # Interpretar como entero
         emp_int = None
         try:
             if emp_val is not None:
@@ -134,7 +122,6 @@ class ShiftCreateSerializer(serializers.Serializer):
                     except Exception:
                         employee = None
 
-        # Buscar por email si es string
         if not employee and isinstance(emp_val, str) and '@' in emp_val:
             user = User.objects.filter(email=emp_val).first()
             if user:
@@ -150,19 +137,13 @@ class ShiftCreateSerializer(serializers.Serializer):
 
         # ✅ CRÍTICO: Verificar solapamiento - LÓGICA MEJORADA PARA TURNOS NOCTURNOS
         if is_overnight_shift:
-            # Para turnos nocturnos, verificar solapamiento en dos partes:
-            # 1. Desde start_time hasta medianoche del mismo día
-            # 2. Desde medianoche hasta end_time del día siguiente
-            
-            # Conflictos en el mismo día (parte nocturna)
             conflicts_same_day = Shift.objects.filter(
                 employee=employee,
                 date=date,
-                start_time__lt='23:59:59',  # Hasta medianoche
+                start_time__lt='23:59:59',
                 end_time__gt=start_time
             )
             
-            # Conflictos en el día siguiente (parte matutina)
             next_day = date + timedelta(days=1)
             conflicts_next_day = Shift.objects.filter(
                 employee=employee,
@@ -174,7 +155,6 @@ class ShiftCreateSerializer(serializers.Serializer):
             conflicts = conflicts_same_day.union(conflicts_next_day)
             
         else:
-            # Para turnos diurnos (mismo día)
             conflicts = Shift.objects.filter(
                 employee=employee,
                 date=date,
@@ -182,7 +162,6 @@ class ShiftCreateSerializer(serializers.Serializer):
                 end_time__gt=start_time
             )
         
-        # ✅ Excluir el turno actual si estamos actualizando
         if self.instance:
             conflicts = conflicts.exclude(pk=self.instance.pk)
             print(f"🔄 [ShiftCreateSerializer] Actualizando turno {self.instance.pk} - excluyendo de validación")
@@ -193,16 +172,14 @@ class ShiftCreateSerializer(serializers.Serializer):
                 "detail": f"Solapamiento con turno existente: {c.start_time} - {c.end_time} en {c.date}"
             })
 
-        # Validar shift_type existe
         try:
             ShiftType.objects.get(pk=data.get('shift_type'))
         except ShiftType.DoesNotExist:
             raise serializers.ValidationError({"shift_type": "Tipo de turno no encontrado."})
 
-        # Attach objects
         data['employee_obj'] = employee
         data['shift_type_obj'] = ShiftType.objects.get(pk=data.get('shift_type'))
-        data['is_overnight'] = is_overnight_shift  # ✅ Pasar información del tipo de turno
+        data['is_overnight'] = is_overnight_shift
         return data
 
     def create(self, validated_data):
@@ -233,7 +210,6 @@ class ShiftCreateSerializer(serializers.Serializer):
         instance.shift_type = validated_data.get('shift_type_obj', instance.shift_type)
         instance.notes = validated_data.get('notes', instance.notes)
         
-        # Validar y guardar
         instance.full_clean()
         instance.save()
         
