@@ -209,3 +209,69 @@ class ShiftCreateSerializer(serializers.Serializer):
         
         logger.info(f"✅ [ShiftCreateSerializer] Validación completada para Employee {employee.id}")
         return data
+
+    def create(self, validated_data):
+        """Crea un Shift a partir de los datos validados.
+
+        Usa `employee_obj` y `shift_type_obj` generados en validate().
+        Asigna `created_by` si existe request.user en el contexto.
+        Convierte errores de Django ValidationError a serializers.ValidationError.
+        """
+        from django.core.exceptions import ValidationError as DjangoValidationError
+
+        employee = validated_data.get('employee_obj')
+        shift_type = validated_data.get('shift_type_obj')
+        date = validated_data.get('date')
+        start_time = validated_data.get('start_time')
+        end_time = validated_data.get('end_time')
+        notes = validated_data.get('notes', '')
+
+        request = self.context.get('request')
+        created_by = None
+        if request and getattr(request, 'user', None) and request.user.is_authenticated:
+            created_by = request.user
+
+        try:
+            shift = Shift.objects.create(
+                date=date,
+                start_time=start_time,
+                end_time=end_time,
+                employee=employee,
+                shift_type=shift_type,
+                notes=notes,
+                **({'created_by': created_by} if created_by else {})
+            )
+            return shift
+        except DjangoValidationError as dve:
+            # Normalizar a ValidationError de DRF
+            detail = getattr(dve, 'message_dict', None) or getattr(dve, 'messages', None) or str(dve)
+            raise serializers.ValidationError(detail)
+
+    def update(self, instance, validated_data):
+        """Actualiza un Shift existente con los datos validados.
+
+        Convierte errores de Django ValidationError a serializers.ValidationError.
+        """
+        from django.core.exceptions import ValidationError as DjangoValidationError
+
+        # Obtener objetos preprocesados por validate
+        employee = validated_data.get('employee_obj', None)
+        shift_type = validated_data.get('shift_type_obj', None)
+
+        # Campos simples
+        instance.date = validated_data.get('date', instance.date)
+        instance.start_time = validated_data.get('start_time', instance.start_time)
+        instance.end_time = validated_data.get('end_time', instance.end_time)
+        if employee is not None:
+            instance.employee = employee
+        if shift_type is not None:
+            instance.shift_type = shift_type
+        instance.notes = validated_data.get('notes', instance.notes)
+
+        try:
+            instance.full_clean()
+            instance.save()
+            return instance
+        except DjangoValidationError as dve:
+            detail = getattr(dve, 'message_dict', None) or getattr(dve, 'messages', None) or str(dve)
+            raise serializers.ValidationError(detail)
