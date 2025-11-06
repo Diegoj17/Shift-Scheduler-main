@@ -84,11 +84,39 @@ class MeView(APIView):
 token_generator = PasswordResetTokenGenerator()
 
 class PasswordResetView(APIView):
+    """
+    Vista para solicitar restablecimiento de contraseña.
+    ✅ CORREGIDO: Ahora devuelve 404 si el correo NO existe
+    """
+    authentication_classes = []
+    permission_classes = []
+
     def post(self, request):
         email = request.data.get('email')
-        # Always return a generic success message for security (do not disclose if email exists).
-        # Perform the email send asynchronously to avoid blocking the request and risking
-        # a gateway/proxy timeout (which can produce a 502 and no CORS headers).
+        
+        if not email:
+            response = Response(
+                {"message": "El correo electrónico es requerido"}, 
+                status=status.HTTP_400_BAD_REQUEST
+            )
+            response["Access-Control-Allow-Origin"] = request.headers.get('Origin', '*')
+            return response
+
+        # ✅ BUSCAR USUARIO - Si no existe, devolver ERROR 404
+        try:
+            user = User.objects.get(email__iexact=email)
+            logging.getLogger('users').info(f"✅ Password reset requested for: {email}")
+        except User.DoesNotExist:
+            # ❌ CORREO NO EXISTE - Devolver ERROR 404
+            logging.getLogger('users').info(f"❌ Password reset requested for non-existing email: {email}")
+            response = Response(
+                {"message": "No existe usuario con ese correo"}, 
+                status=status.HTTP_404_NOT_FOUND
+            )
+            response["Access-Control-Allow-Origin"] = request.headers.get('Origin', '*')
+            return response
+
+        # ✅ CORREO EXISTE - Generar token y enviar email
         def _send_reset(to_email, user_name, reset_token, uid=None):
             try:
                 email_service = get_email_service()
@@ -104,7 +132,6 @@ class PasswordResetView(APIView):
                 logging.getLogger('users').exception(f"Exception while sending password reset email to {to_email}: {e}")
 
         try:
-            user = User.objects.get(email=email)
             # Prefer DB-backed token (persistent, revocable). Create and store it
             try:
                 timeout = getattr(settings, 'PASSWORD_RESET_TIMEOUT', 3600)
@@ -121,22 +148,35 @@ class PasswordResetView(APIView):
                     logging.getLogger('users').debug(f"Stored password reset token in cache for user {user.pk}")
                 except Exception as e:
                     logging.getLogger('users').exception(f"Could not store reset token in cache: {e}")
-            # Dispatch async email sender
+            
             # Encode uidb64 for frontend consumption (preferred)
             try:
                 uidb64 = urlsafe_base64_encode(smart_bytes(user.pk))
             except Exception:
                 uidb64 = None
 
-            threading.Thread(target=_send_reset, args=(user.email, user.first_name or user.email, reset_token, uidb64), daemon=True).start()
-        except User.DoesNotExist:
-            # Intentionally ignore: we still return the same response below.
-            logging.getLogger('users').info(f"Password reset requested for non-existing email: {email}")
+            # Dispatch async email sender
+            threading.Thread(
+                target=_send_reset, 
+                args=(user.email, user.first_name or user.email, reset_token, uidb64), 
+                daemon=True
+            ).start()
+            
         except Exception as e:
-            # Catch unexpected errors during lookup/generation and log them; still return generic response.
-            logging.getLogger('users').exception(f"Unexpected error during password reset request for {email}: {e}")
+            # Catch unexpected errors during token generation
+            logging.getLogger('users').exception(f"Unexpected error during password reset for {email}: {e}")
+            response = Response(
+                {"message": "Error al procesar la solicitud"}, 
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+            response["Access-Control-Allow-Origin"] = request.headers.get('Origin', '*')
+            return response
 
-        response = Response({"message": "Si el email existe, recibirás instrucciones"}, status=200)
+        # ✅ ÉXITO - Correo existe y se está enviando el email
+        response = Response(
+            {"message": "Se ha enviado un enlace de recuperación a tu correo electrónico"}, 
+            status=status.HTTP_200_OK
+        )
         response["Access-Control-Allow-Origin"] = request.headers.get('Origin', '*')
         return response
 
