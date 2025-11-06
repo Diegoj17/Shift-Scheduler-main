@@ -277,9 +277,6 @@ class ShiftCreateAPIView(APIView):
 
     def post(self, request, *args, **kwargs):
         try:
-            # Normalize incoming payload: some frontends send a User.id instead of
-            # an Employee.pk. Try to resolve and rewrite `employee` to Employee.pk
-            # before validation to give clearer behaviour.
             incoming = request.data.copy()
             emp_val = incoming.get('employee')
             if emp_val is not None:
@@ -311,7 +308,6 @@ class ShiftCreateAPIView(APIView):
                         'start': f"{instance.date}T{instance.start_time}" if instance.date and instance.start_time else None,
                         'end': f"{instance.date}T{instance.end_time}" if instance.date and instance.end_time else None,
                         'employee_id': getattr(instance.employee, 'id', None),
-                        'employee_user_id': getattr(getattr(instance.employee, 'user', None), 'id', None),
                         'shift_type_id': getattr(instance.shift_type, 'id', None),
                         'notes': instance.notes,
                     }, status=status.HTTP_201_CREATED)
@@ -686,7 +682,6 @@ class MyShiftsAPIView(APIView):
                         'start': f"{s.date}T{s.start_time}" if s.date and s.start_time else None,
                         'end': f"{s.date}T{s.end_time}" if s.date and s.end_time else None,
                         'employee': s.employee.id,
-                        'employee_user_id': getattr(getattr(s.employee, 'user', None), 'id', None),
                         'employee_name': employee_name,
                         'employee_position': employee_position,  
                         'shift_type': s.shift_type.id if s.shift_type else None,
