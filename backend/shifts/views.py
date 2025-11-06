@@ -375,6 +375,8 @@ class ShiftListAPIView(APIView):
 
     def get(self, request, *args, **kwargs):
         try:
+            # logger local para esta vista
+            logger = logging.getLogger(__name__)
             print("🔍 INICIANDO ShiftListAPIView")
             
             shifts_data = []
@@ -624,90 +626,116 @@ class MyShiftsAPIView(APIView):
     permission_classes = [permissions.IsAuthenticated]
 
     def get(self, request, *args, **kwargs):
-        import logging
-        logger = logging.getLogger(__name__)
-        
         try:
             user = request.user
             logger.info(f"🔍 [MyShiftsAPIView] Usuario autenticado: ID={user.id}, Email={user.email}")
             
-            # Buscar el Employee asociado al usuario
+            # ✅ BUSCAR EMPLEADO DE FORMA MÁS ROBUSTA
+            employee = None
+            
+            # Método 1: Buscar directamente por user
             try:
                 employee = Employee.objects.get(user=user)
-                logger.info(f"✅ [MyShiftsAPIView] Employee encontrado: ID={employee.id}, Position={employee.position}")
-                
-                # ✅ OBTENER PARÁMETROS DE FILTRO
-                start_date = request.query_params.get('start_date')
-                end_date = request.query_params.get('end_date')
-                
-                logger.info(f"📅 Parámetros de filtro recibidos: start_date={start_date}, end_date={end_date}")
-                
-                # Construir queryset base
-                shifts_qs = Shift.objects.filter(employee=employee).select_related(
-                    'shift_type', 'employee__user'
-                )
-                
-                # ✅ APLICAR FILTROS DE FECHA
-                if start_date:
-                    try:
-                        start_date_obj = datetime.fromisoformat(start_date).date()
-                        shifts_qs = shifts_qs.filter(date__gte=start_date_obj)
-                        logger.info(f"📅 Filtrado desde: {start_date_obj}, Turnos después del filtro: {shifts_qs.count()}")
-                    except (ValueError, TypeError) as e:
-                        logger.warning(f"⚠️ Error al parsear start_date: {e}")
-                
-                if end_date:
-                    try:
-                        end_date_obj = datetime.fromisoformat(end_date).date()
-                        shifts_qs = shifts_qs.filter(date__lte=end_date_obj)
-                        logger.info(f"📅 Filtrado hasta: {end_date_obj}, Turnos después del filtro: {shifts_qs.count()}")
-                    except (ValueError, TypeError) as e:
-                        logger.warning(f"⚠️ Error al parsear end_date: {e}")
-                
-                # Ordenar por fecha y hora
-                shifts_qs = shifts_qs.order_by('date', 'start_time')
-                
-                total_shifts = shifts_qs.count()
-                logger.info(f"📊 [MyShiftsAPIView] Total de turnos después de filtros: {total_shifts}")
-                
-                # Construir respuesta
-                results = []
-                for s in shifts_qs:
-                    # Obtener información del empleado
-                    employee_position = s.employee.position if s.employee else None
-                    user_obj = s.employee.user if s.employee else None
-                    employee_name = f"{user_obj.first_name or ''} {user_obj.last_name or ''}".strip() if user_obj else None
-                    
-                    shift_data = {
-                        'id': s.id,
-                        'date': s.date.isoformat() if s.date else None,
-                        'start_time': s.start_time.isoformat() if s.start_time else None,
-                        'end_time': s.end_time.isoformat() if s.end_time else None,
-                        'start': f"{s.date}T{s.start_time}" if s.date and s.start_time else None,
-                        'end': f"{s.date}T{s.end_time}" if s.date and s.end_time else None,
-                        'employee': s.employee.id,
-                        'employee_user_id': getattr(getattr(s.employee, 'user', None), 'id', None),
-                        'employee_name': employee_name,
-                        'employee_position': employee_position,  
-                        'shift_type': s.shift_type.id if s.shift_type else None,
-                        'shift_type_name': getattr(s.shift_type, 'name', None),
-                        'shift_type_color': getattr(s.shift_type, 'color', None),
-                        'notes': s.notes or '',
-                        'status': 'confirmed'
-                    }
-                    results.append(shift_data)
-                    
-                    logger.info(f"📋 Turno {s.id}: Fecha={s.date}, Position={employee_position}")
-                
-                logger.info(f"✅ [MyShiftsAPIView] Retornando {len(results)} turnos")
-                return Response({'results': results}, status=status.HTTP_200_OK)
-                
+                logger.info(f"✅ [MyShiftsAPIView] Employee encontrado por user: ID={employee.id}")
             except Employee.DoesNotExist:
-                logger.error(f"❌ [MyShiftsAPIView] NO existe Employee para usuario {user.id}")
+                # Método 2: Buscar por user_id
+                employee = Employee.objects.filter(user_id=user.id).first()
+                if employee:
+                    logger.info(f"✅ [MyShiftsAPIView] Employee encontrado por user_id: ID={employee.id}")
+                else:
+                    logger.error(f"❌ [MyShiftsAPIView] NO existe Employee para usuario {user.id}")
+                    return Response({
+                        'results': [],
+                        'message': 'No se encontró registro de empleado para este usuario. Contacte al administrador.'
+                    }, status=status.HTTP_404_NOT_FOUND)
+            
+            if not employee:
+                logger.error(f"❌ [MyShiftsAPIView] Employee es None para usuario {user.id}")
                 return Response({
                     'results': [],
-                    'message': 'No se encontró registro de empleado para este usuario'
-                }, status=status.HTTP_200_OK)
+                    'message': 'Error al cargar el perfil de empleado'
+                }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+            # ✅ VERIFICAR QUE EL EMPLOYEE ESTÉ ACTIVO
+            if not getattr(employee, 'is_active', True):
+                logger.warning(f"⚠️ [MyShiftsAPIView] Employee {employee.id} no está activo")
+                return Response({
+                    'results': [],
+                    'message': 'Su cuenta de empleado no está activa'
+                }, status=status.HTTP_403_FORBIDDEN)
+
+            logger.info(f"✅ [MyShiftsAPIView] Employee validado: ID={employee.id}, Position={employee.position}")
+            
+            # ✅ OBTENER PARÁMETROS DE FILTRO
+            start_date = request.query_params.get('start_date')
+            end_date = request.query_params.get('end_date')
+            
+            logger.info(f"📅 Parámetros de filtro recibidos: start_date={start_date}, end_date={end_date}")
+            
+            # Construir queryset base
+            shifts_qs = Shift.objects.filter(employee=employee).select_related(
+                'shift_type', 'employee__user'
+            )
+            
+            # ✅ APLICAR FILTROS DE FECHA
+            if start_date:
+                try:
+                    start_date_obj = datetime.fromisoformat(start_date).date()
+                    shifts_qs = shifts_qs.filter(date__gte=start_date_obj)
+                    logger.info(f"📅 Filtrado desde: {start_date_obj}, Turnos después del filtro: {shifts_qs.count()}")
+                except (ValueError, TypeError) as e:
+                    logger.warning(f"⚠️ Error al parsear start_date: {e}")
+            
+            if end_date:
+                try:
+                    end_date_obj = datetime.fromisoformat(end_date).date()
+                    shifts_qs = shifts_qs.filter(date__lte=end_date_obj)
+                    logger.info(f"📅 Filtrado hasta: {end_date_obj}, Turnos después del filtro: {shifts_qs.count()}")
+                except (ValueError, TypeError) as e:
+                    logger.warning(f"⚠️ Error al parsear end_date: {e}")
+            
+            # Ordenar por fecha y hora
+            shifts_qs = shifts_qs.order_by('date', 'start_time')
+            
+            total_shifts = shifts_qs.count()
+            logger.info(f"📊 [MyShiftsAPIView] Total de turnos después de filtros: {total_shifts}")
+            
+            # Construir respuesta
+            results = []
+            for s in shifts_qs:
+                # Obtener información del empleado
+                employee_position = s.employee.position if s.employee else None
+                user_obj = s.employee.user if s.employee else None
+                employee_name = f"{user_obj.first_name or ''} {user_obj.last_name or ''}".strip() if user_obj else None
+                
+                shift_data = {
+                    'id': s.id,
+                    'date': s.date.isoformat() if s.date else None,
+                    'start_time': s.start_time.isoformat() if s.start_time else None,
+                    'end_time': s.end_time.isoformat() if s.end_time else None,
+                    'start': f"{s.date}T{s.start_time}" if s.date and s.start_time else None,
+                    'end': f"{s.date}T{s.end_time}" if s.date and s.end_time else None,
+                    'employee': s.employee.id,
+                    'employee_user_id': getattr(getattr(s.employee, 'user', None), 'id', None),
+                    'employee_name': employee_name,
+                    'employee_position': employee_position,  
+                    'shift_type': s.shift_type.id if s.shift_type else None,
+                    'shift_type_name': getattr(s.shift_type, 'name', None),
+                    'shift_type_color': getattr(s.shift_type, 'color', None),
+                    'notes': s.notes or '',
+                    'status': 'confirmed'
+                }
+                results.append(shift_data)
+                logger.info(f"📋 Turno {s.id}: Fecha={s.date}, Position={employee_position}")
+
+            logger.info(f"✅ [MyShiftsAPIView] Retornando {len(results)} turnos")
+            return Response({'results': results}, status=status.HTTP_200_OK)
+        except Employee.DoesNotExist:
+            logger.error(f"❌ [MyShiftsAPIView] NO existe Employee para usuario {user.id}")
+            return Response({
+                'results': [],
+                'message': 'No se encontró registro de empleado para este usuario'
+            }, status=status.HTTP_200_OK)
                 
         except Exception as exc:
             logger.exception("💥 [MyShiftsAPIView] Error inesperado al obtener turnos")
