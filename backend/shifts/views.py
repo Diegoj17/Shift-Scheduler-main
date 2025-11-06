@@ -304,14 +304,17 @@ class ShiftCreateAPIView(APIView):
                 instance = serializer.save()
                 # devolver representación simple
                 return Response({
-                    'id': instance.id,
-                    'date': instance.date.isoformat() if instance.date else None,
-                    'start_time': instance.start_time.isoformat() if instance.start_time else None,
-                    'end_time': instance.end_time.isoformat() if instance.end_time else None,
-                    'employee_id': getattr(instance.employee, 'id', None),
-                    'shift_type_id': getattr(instance.shift_type, 'id', None),
-                    'notes': instance.notes,
-                }, status=status.HTTP_201_CREATED)
+                        'id': instance.id,
+                        'date': instance.date.isoformat() if instance.date else None,
+                        'start_time': instance.start_time.isoformat() if instance.start_time else None,
+                        'end_time': instance.end_time.isoformat() if instance.end_time else None,
+                        'start': f"{instance.date}T{instance.start_time}" if instance.date and instance.start_time else None,
+                        'end': f"{instance.date}T{instance.end_time}" if instance.date and instance.end_time else None,
+                        'employee_id': getattr(instance.employee, 'id', None),
+                        'employee_user_id': getattr(getattr(instance.employee, 'user', None), 'id', None),
+                        'shift_type_id': getattr(instance.shift_type, 'id', None),
+                        'notes': instance.notes,
+                    }, status=status.HTTP_201_CREATED)
             # Loguear detalles para facilitar debugging de 400s desde frontend
             logging.warning("ShiftCreateAPIView: petición inválida %s -> %s", request.data, serializer.errors)
             return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
@@ -496,14 +499,17 @@ class ShiftUpdateAPIView(APIView):
                 print(f"✅ Turno actualizado exitosamente: {instance.id}")
                 
                 return Response({
-                    'id': instance.id,
-                    'date': instance.date.isoformat() if instance.date else None,
-                    'start_time': instance.start_time.isoformat() if instance.start_time else None,
-                    'end_time': instance.end_time.isoformat() if instance.end_time else None,
-                    'employee': getattr(instance.employee, 'id', None),
-                    'shift_type': getattr(instance.shift_type, 'id', None),
-                    'notes': instance.notes or '',
-                }, status=status.HTTP_200_OK)
+                            'id': instance.id,
+                            'date': instance.date.isoformat() if instance.date else None,
+                            'start_time': instance.start_time.isoformat() if instance.start_time else None,
+                            'end_time': instance.end_time.isoformat() if instance.end_time else None,
+                            'start': f"{instance.date}T{instance.start_time}" if instance.date and instance.start_time else None,
+                            'end': f"{instance.date}T{instance.end_time}" if instance.date and instance.end_time else None,
+                            'employee': getattr(instance.employee, 'id', None),
+                            'employee_user_id': getattr(getattr(instance.employee, 'user', None), 'id', None),
+                            'shift_type': getattr(instance.shift_type, 'id', None),
+                            'notes': instance.notes or '',
+                        }, status=status.HTTP_200_OK)
             except Exception as exc:
                 logging.exception("Error al actualizar turno")
                 print(f"❌ Error al guardar: {exc}")
@@ -680,6 +686,7 @@ class MyShiftsAPIView(APIView):
                         'start': f"{s.date}T{s.start_time}" if s.date and s.start_time else None,
                         'end': f"{s.date}T{s.end_time}" if s.date and s.end_time else None,
                         'employee': s.employee.id,
+                        'employee_user_id': getattr(getattr(s.employee, 'user', None), 'id', None),
                         'employee_name': employee_name,
                         'employee_position': employee_position,  
                         'shift_type': s.shift_type.id if s.shift_type else None,
