@@ -60,25 +60,17 @@ class ShiftTypeSerializer(serializers.ModelSerializer):
         fields = ('id', 'name', 'start_time', 'end_time', 'color')
         read_only_fields = ('id',)
 
-    def validate_start_time(self, value):
-        """Aceptar tanto HH:MM como HH:MM:SS"""
-        if isinstance(value, str):
-            if len(value) == 5:  # Formato HH:MM
-                return value + ':00'
-        return value
-
-    def validate_end_time(self, value):
-        """Aceptar tanto HH:MM como HH:MM:SS"""
-        if isinstance(value, str):
-            if len(value) == 5:  # Formato HH:MM
-                return value + ':00'
-        return value
-
     def validate(self, data):
         start = data.get('start_time')
         end = data.get('end_time')
-        if start and end and start >= end:
-            raise serializers.ValidationError("La hora de fin debe ser mayor a la hora de inicio")
+        
+        if start and end:
+            # Permitir turnos nocturnos (cuando end < start)
+            # Esto significa que el turno cruza la medianoche
+            if start == end:
+                raise serializers.ValidationError("La hora de inicio y fin no pueden ser iguales")
+            # No hacemos validación de start < end porque los turnos nocturnos son válidos
+        
         return data
 
 
