@@ -14,7 +14,7 @@ from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import status, permissions
 from rest_framework_simplejwt.authentication import JWTAuthentication
-from .serializers import ShiftTypeSerializer, ShiftCreateSerializer, ShiftSerializer, AvailabilitySerializer, AvailabilityListSerializer
+from .serializers import ShiftTypeSerializer, ShiftCreateSerializer, ShiftUpdateSerializer, ShiftSerializer, AvailabilitySerializer, AvailabilityListSerializer
 import logging
 import traceback
 from django.conf import settings
@@ -475,10 +475,7 @@ class ShiftListAPIView(APIView):
 
 @method_decorator(csrf_exempt, name='dispatch')
 class ShiftUpdateAPIView(APIView):
-    """API para actualizar un turno existente.
-    
-    ✅ SIMPLIFICADO: Solo pasa datos al serializer
-    """
+    """API para actualizar un turno existente usando EMPLOYEE_ID"""
     authentication_classes = [JWTAuthentication]
     permission_classes = [permissions.IsAuthenticated]
 
@@ -492,8 +489,8 @@ class ShiftUpdateAPIView(APIView):
         except Shift.DoesNotExist:
             return Response({'error': 'Turno no encontrado'}, status=status.HTTP_404_NOT_FOUND)
 
-        # ✅ NO PROCESAR - Pasar directo al serializer
-        serializer = ShiftCreateSerializer(instance=shift, data=request.data)
+        # ✅ USAR ShiftUpdateSerializer que espera EMPLOYEE_ID
+        serializer = ShiftUpdateSerializer(instance=shift, data=request.data)
         
         if serializer.is_valid():
             try:
@@ -507,8 +504,8 @@ class ShiftUpdateAPIView(APIView):
                     'end_time': instance.end_time.isoformat() if instance.end_time else None,
                     'start': f"{instance.date}T{instance.start_time}" if instance.date and instance.start_time else None,
                     'end': f"{instance.date}T{instance.end_time}" if instance.date and instance.end_time else None,
-                    'employee': instance.employee.id,
-                    'employee_user_id': instance.employee.user.id,
+                    'employee': instance.employee.id,  # ✅ employee_id
+                    'employee_user_id': instance.employee.user.id,  # ✅ user_id
                     'shift_type': instance.shift_type.id,
                     'notes': instance.notes or '',
                 }, status=status.HTTP_200_OK)
