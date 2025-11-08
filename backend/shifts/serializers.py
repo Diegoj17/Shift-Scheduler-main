@@ -129,20 +129,33 @@ class ShiftCreateSerializer(serializers.Serializer):
                 "employee": f"No existe usuario con ID {user_id}"
             })
 
-        # ✅ PASO 2: Buscar o crear Employee (ATÓMICO para evitar duplicados)
+        # ✅ PASO 2: Buscar Employee existente. NO crear en producción.
+        #    - Si estamos en DEBUG permitimos la creación automática (útil en dev/local)
+        #    - En producción (DEBUG=False) rechazamos la petición si no existe Employee
+        from django.conf import settings as _dj_settings
+
         with transaction.atomic():
-            employee, created = Employee.objects.select_for_update().get_or_create(
-                user=user,
-                defaults={
-                    'position': getattr(user, 'puesto', None) or 'Sin especificar',
-                    'is_active': True
-                }
-            )
-            
-            if created:
-                logger.info(f"✅ Employee CREADO: ID={employee.id} para User={user.email}")
-            else:
+            employee = Employee.objects.select_for_update().filter(user=user).first()
+
+            if employee:
                 logger.info(f"✅ Employee EXISTENTE: ID={employee.id} para User={user.email}")
+            else:
+                if getattr(_dj_settings, 'DEBUG', False):
+                    # En entornos de desarrollo sí permitimos crear para conveniencia
+                    employee = Employee.objects.create(
+                        user=user,
+                        position=getattr(user, 'puesto', None) or 'Sin especificar',
+                        is_active=True
+                    )
+                    logger.info(f"⚠️ DEBUG: Employee CREADO automáticamente: ID={employee.id} para User={user.email}")
+                else:
+                    # En producción nunca crear. Forzar al cliente a usar Employee existente.
+                    raise serializers.ValidationError({
+                        'employee': (
+                            'Empleado no encontrado. En producción no se crean perfiles automáticamente. '
+                            'Cree el Employee en el panel de administración o contacte al administrador.'
+                        )
+                    })
 
         # ✅ Validar que está activo
         if not employee.is_active:
