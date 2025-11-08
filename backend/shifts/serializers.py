@@ -73,7 +73,7 @@ class ShiftCreateSerializer(serializers.Serializer):
     date = serializers.DateField()
     start_time = serializers.TimeField()
     end_time = serializers.TimeField()
-    employee = serializers.IntegerField()  # ✅ DEBE SER EMPLOYEE_ID
+    employee = serializers.IntegerField()  # ✅ Recibe USER_ID
     shift_type = serializers.IntegerField()
     notes = serializers.CharField(allow_blank=True, required=False)
     
@@ -81,6 +81,7 @@ class ShiftCreateSerializer(serializers.Serializer):
         from .models import Employee, Shift, ShiftType
         from django.core.exceptions import ValidationError
         from django.contrib.auth import get_user_model
+        from django.db import transaction
         from datetime import timedelta
         User = get_user_model()
 
@@ -93,9 +94,11 @@ class ShiftCreateSerializer(serializers.Serializer):
         is_overnight_shift = end_time < start_time
         
         if not is_overnight_shift and start_time >= end_time:
-            raise serializers.ValidationError("La hora de inicio debe ser anterior a la de fin para turnos diurnos.")
+            raise serializers.ValidationError(
+                "La hora de inicio debe ser anterior a la de fin para turnos diurnos."
+            )
 
-        # ✅ CORRECCIÓN CRÍTICA: Validar empleado SIN CREAR automáticamente
+        # ✅ NUEVA LÓGICA: Buscar o crear Employee ATÓMICAMENTE
         employee = None
         
         if isinstance(emp_id, dict):
@@ -104,32 +107,44 @@ class ShiftCreateSerializer(serializers.Serializer):
             emp_val = emp_id
 
         try:
-            emp_int = int(emp_val) if emp_val is not None else None
+            user_id = int(emp_val) if emp_val is not None else None
         except (TypeError, ValueError):
             raise serializers.ValidationError({
-                "employee": f"ID de empleado inválido: {emp_val}"
+                "employee": f"ID inválido: {emp_val}"
             })
 
-        if emp_int is None:
+        if user_id is None:
             raise serializers.ValidationError({
-                "employee": "El ID del empleado es requerido"
+                "employee": "El ID es requerido"
             })
 
-        # ✅ NUEVO: Buscar solo, NUNCA crear
-        logger.info(f"🔍 Buscando Employee con ID: {emp_int}")
+        logger.info(f"🔍 [ShiftCreateSerializer] ID recibido: {user_id}")
         
-        # Intentar primero como Employee.id
-        employee = Employee.objects.filter(pk=emp_int).first()
-        
-        if not employee:
-            # ❌ REMOVIDO: NO crear automáticamente
-            # Solo lanzar error claro
+        # ✅ PASO 1: Buscar usuario
+        try:
+            user = User.objects.get(pk=user_id)
+            logger.info(f"✅ User encontrado: ID={user.id}, Email={user.email}")
+        except User.DoesNotExist:
             raise serializers.ValidationError({
-                "employee": f"No existe Employee con ID {emp_int}. El Employee debe ser creado manualmente primero."
+                "employee": f"No existe usuario con ID {user_id}"
             })
 
-        logger.info(f"✅ Employee encontrado: ID={employee.id}, User={employee.user.email}, Position={employee.position}")
+        # ✅ PASO 2: Buscar o crear Employee (ATÓMICO para evitar duplicados)
+        with transaction.atomic():
+            employee, created = Employee.objects.select_for_update().get_or_create(
+                user=user,
+                defaults={
+                    'position': getattr(user, 'puesto', None) or 'Sin especificar',
+                    'is_active': True
+                }
+            )
+            
+            if created:
+                logger.info(f"✅ Employee CREADO: ID={employee.id} para User={user.email}")
+            else:
+                logger.info(f"✅ Employee EXISTENTE: ID={employee.id} para User={user.email}")
 
+        # ✅ Validar que está activo
         if not employee.is_active:
             raise serializers.ValidationError({
                 "employee": "El empleado no está activo"
@@ -153,7 +168,6 @@ class ShiftCreateSerializer(serializers.Serializer):
             )
             
             conflicts = conflicts_same_day.union(conflicts_next_day)
-            
         else:
             conflicts = Shift.objects.filter(
                 employee=employee,
@@ -164,7 +178,6 @@ class ShiftCreateSerializer(serializers.Serializer):
         
         if self.instance:
             conflicts = conflicts.exclude(pk=self.instance.pk)
-            logger.info(f"🔄 Actualizando turno {self.instance.pk} - excluyendo de validación")
         
         if conflicts.exists():
             c = conflicts.first()
@@ -172,7 +185,7 @@ class ShiftCreateSerializer(serializers.Serializer):
                 "detail": f"Solapamiento con turno existente: {c.start_time} - {c.end_time} en {c.date}"
             })
 
-        # Validar ShiftType
+        # ✅ Validar ShiftType
         try:
             shift_type_obj = ShiftType.objects.get(pk=data.get('shift_type'))
         except ShiftType.DoesNotExist:
