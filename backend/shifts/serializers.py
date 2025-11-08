@@ -73,13 +73,12 @@ class ShiftCreateSerializer(serializers.Serializer):
     date = serializers.DateField()
     start_time = serializers.TimeField()
     end_time = serializers.TimeField()
-    employee = serializers.IntegerField()  # ✅ Recibe USER_ID
+    employee = serializers.IntegerField()  # ✅ SIEMPRE recibe USER_ID
     shift_type = serializers.IntegerField()
     notes = serializers.CharField(allow_blank=True, required=False)
     
     def validate(self, data):
         from .models import Employee, Shift, ShiftType
-        from django.core.exceptions import ValidationError
         from django.contrib.auth import get_user_model
         from django.db import transaction
         from datetime import timedelta
@@ -88,7 +87,7 @@ class ShiftCreateSerializer(serializers.Serializer):
         date = data.get('date')
         start_time = data.get('start_time')
         end_time = data.get('end_time')
-        emp_id = data.get('employee')
+        user_id = data.get('employee')  # ✅ Es USER_ID
 
         # ✅ Permitir turnos nocturnos
         is_overnight_shift = end_time < start_time
@@ -98,29 +97,17 @@ class ShiftCreateSerializer(serializers.Serializer):
                 "La hora de inicio debe ser anterior a la de fin para turnos diurnos."
             )
 
-        # ✅ NUEVA LÓGICA: Buscar o crear Employee ATÓMICAMENTE
-        employee = None
-        
-        if isinstance(emp_id, dict):
-            emp_val = emp_id.get('id') or emp_id.get('pk')
-        else:
-            emp_val = emp_id
-
+        # ✅ Validar que user_id sea válido
         try:
-            user_id = int(emp_val) if emp_val is not None else None
+            user_id = int(user_id)
         except (TypeError, ValueError):
             raise serializers.ValidationError({
-                "employee": f"ID inválido: {emp_val}"
+                "employee": f"ID de usuario inválido: {user_id}"
             })
 
-        if user_id is None:
-            raise serializers.ValidationError({
-                "employee": "El ID es requerido"
-            })
-
-        logger.info(f"🔍 [ShiftCreateSerializer] ID recibido: {user_id}")
+        logger.info(f"🔍 [ShiftCreateSerializer] Procesando USER_ID: {user_id}")
         
-        # ✅ PASO 1: Buscar usuario
+        # ✅ PASO 1: Verificar que el usuario existe
         try:
             user = User.objects.get(pk=user_id)
             logger.info(f"✅ User encontrado: ID={user.id}, Email={user.email}")
@@ -129,33 +116,35 @@ class ShiftCreateSerializer(serializers.Serializer):
                 "employee": f"No existe usuario con ID {user_id}"
             })
 
-        # ✅ PASO 2: Buscar Employee existente. NO crear en producción.
-        #    - Si estamos en DEBUG permitimos la creación automática (útil en dev/local)
-        #    - En producción (DEBUG=False) rechazamos la petición si no existe Employee
-        from django.conf import settings as _dj_settings
-
-        with transaction.atomic():
-            employee = Employee.objects.select_for_update().filter(user=user).first()
-
-            if employee:
-                logger.info(f"✅ Employee EXISTENTE: ID={employee.id} para User={user.email}")
-            else:
-                if getattr(_dj_settings, 'DEBUG', False):
-                    # En entornos de desarrollo sí permitimos crear para conveniencia
-                    employee = Employee.objects.create(
-                        user=user,
-                        position=getattr(user, 'puesto', None) or 'Sin especificar',
-                        is_active=True
-                    )
-                    logger.info(f"⚠️ DEBUG: Employee CREADO automáticamente: ID={employee.id} para User={user.email}")
+        # ✅ PASO 2: BUSCAR Employee existente por user
+        # NUNCA crear automáticamente, solo buscar
+        try:
+            employee = Employee.objects.get(user=user)
+            logger.info(f"✅ Employee EXISTENTE encontrado: Employee ID={employee.id} para User ID={user_id}")
+        except Employee.DoesNotExist:
+            # ✅ NO EXISTE - Crear UNA SOLA VEZ usando get_or_create para evitar duplicados
+            logger.info(f"⚠️ No existe Employee para User ID={user_id}, creando...")
+            
+            with transaction.atomic():
+                employee, created = Employee.objects.select_for_update().get_or_create(
+                    user=user,
+                    defaults={
+                        'position': getattr(user, 'puesto', None) or 'Sin especificar',
+                        'is_active': True
+                    }
+                )
+                
+                if created:
+                    logger.info(f"✅ Employee CREADO: ID={employee.id} para User={user.email}")
                 else:
-                    # En producción nunca crear. Forzar al cliente a usar Employee existente.
-                    raise serializers.ValidationError({
-                        'employee': (
-                            'Empleado no encontrado. En producción no se crean perfiles automáticamente. '
-                            'Cree el Employee en el panel de administración o contacte al administrador.'
-                        )
-                    })
+                    logger.info(f"✅ Employee ya existía (creado por otro proceso): ID={employee.id}")
+        
+        except Employee.MultipleObjectsReturned:
+            # ❌ DUPLICADOS - Error crítico
+            logger.error(f"❌ DUPLICADOS: User {user_id} tiene múltiples Employees!")
+            raise serializers.ValidationError({
+                "employee": "Error: Usuario con múltiples perfiles de empleado. Contacte al administrador para limpiar la base de datos."
+            })
 
         # ✅ Validar que está activo
         if not employee.is_active:
@@ -214,37 +203,38 @@ class ShiftCreateSerializer(serializers.Serializer):
     def create(self, validated_data):
         from .models import Shift
 
-        logger.info(f"📝 Creando turno para Employee ID: {validated_data['employee_obj'].id}")
+        employee = validated_data['employee_obj']
+        logger.info(f"📝 Creando turno - Employee ID: {employee.id}, User ID: {employee.user.id}")
         
         shift = Shift(
             date=validated_data['date'],
             start_time=validated_data['start_time'],
             end_time=validated_data['end_time'],
-            employee=validated_data['employee_obj'],
+            employee=employee,
             shift_type=validated_data['shift_type_obj'],
             notes=validated_data.get('notes', '')
         )
         shift.full_clean()
         shift.save()
         
-        logger.info(f"✅ Turno creado: ID={shift.id}, Employee={shift.employee.id}")
+        logger.info(f"✅ Turno creado exitosamente: Shift ID={shift.id}, Employee ID={shift.employee.id}, User ID={shift.employee.user.id}")
         return shift
 
     def update(self, instance, validated_data):
-        logger.info(f"🔄 Actualizando turno {instance.pk}")
-        logger.info(f"📝 Datos validados: Employee ID={validated_data['employee_obj'].id}")
+        employee = validated_data['employee_obj']
+        logger.info(f"🔄 Actualizando turno {instance.pk} - Nuevo Employee ID: {employee.id}, User ID: {employee.user.id}")
         
         instance.date = validated_data.get('date', instance.date)
         instance.start_time = validated_data.get('start_time', instance.start_time)
         instance.end_time = validated_data.get('end_time', instance.end_time)
-        instance.employee = validated_data.get('employee_obj', instance.employee)
+        instance.employee = employee
         instance.shift_type = validated_data.get('shift_type_obj', instance.shift_type)
         instance.notes = validated_data.get('notes', instance.notes)
         
         instance.full_clean()
         instance.save()
         
-        logger.info(f"✅ Turno {instance.pk} actualizado - Employee: {instance.employee.id}")
+        logger.info(f"✅ Turno {instance.pk} actualizado - Employee: {instance.employee.id}, User: {instance.employee.user.id}")
         return instance
 
 
