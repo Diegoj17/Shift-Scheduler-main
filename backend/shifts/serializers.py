@@ -162,14 +162,14 @@ class ShiftCreateSerializer(serializers.Serializer):
 
         # ✅ CORREGIDO: Verificar solapamiento - SIN usar .union()
         if is_overnight_shift:
-            # Para turnos nocturnos, verificar ambas partes por separado
+            # Para turnos nocturnos, comprobar conflictos en cada parte por separado
             conflicts_same_day = Shift.objects.filter(
                 employee=employee,
                 date=date,
                 start_time__lt='23:59:59',
                 end_time__gt=start_time
             )
-            
+
             next_day = date + timedelta(days=1)
             conflicts_next_day = Shift.objects.filter(
                 employee=employee,
@@ -177,17 +177,22 @@ class ShiftCreateSerializer(serializers.Serializer):
                 start_time__lt=end_time,
                 end_time__gt='00:00:00'
             )
-            
-            # ✅ CORRECCIÓN: Excluir la instancia actual ANTES de verificar existencia
+
+            # Excluir instancia actual en cada queryset (exclude no soportado sobre union)
             if self.instance:
                 conflicts_same_day = conflicts_same_day.exclude(pk=self.instance.pk)
                 conflicts_next_day = conflicts_next_day.exclude(pk=self.instance.pk)
-            
-            # Verificar si hay conflictos en alguna de las partes
-            if conflicts_same_day.exists() or conflicts_next_day.exists():
-                conflict = conflicts_same_day.first() or conflicts_next_day.first()
+
+            if conflicts_same_day.exists():
+                c = conflicts_same_day.first()
                 raise serializers.ValidationError({
-                    "detail": f"Solapamiento con turno existente: {conflict.start_time} - {conflict.end_time} en {conflict.date}"
+                    "detail": f"Solapamiento con turno existente: {c.start_time} - {c.end_time} en {c.date}"
+                })
+
+            if conflicts_next_day.exists():
+                c = conflicts_next_day.first()
+                raise serializers.ValidationError({
+                    "detail": f"Solapamiento con turno existente: {c.start_time} - {c.end_time} en {c.date}"
                 })
                 
         else:
@@ -264,13 +269,14 @@ class ShiftUpdateSerializer(serializers.Serializer):
 
         # ✅ Verificar solapamiento
         if is_overnight_shift:
+            # Para turnos nocturnos, comprobar conflictos por separado
             conflicts_same_day = Shift.objects.filter(
                 employee=employee,
                 date=date,
                 start_time__lt='23:59:59',
                 end_time__gt=start_time
             )
-            
+
             next_day = date + timedelta(days=1)
             conflicts_next_day = Shift.objects.filter(
                 employee=employee,
@@ -278,8 +284,17 @@ class ShiftUpdateSerializer(serializers.Serializer):
                 start_time__lt=end_time,
                 end_time__gt='00:00:00'
             )
-            
-            conflicts = conflicts_same_day.union(conflicts_next_day)
+
+            # Excluir instancia actual en cada queryset
+            if self.instance:
+                conflicts_same_day = conflicts_same_day.exclude(pk=self.instance.pk)
+                conflicts_next_day = conflicts_next_day.exclude(pk=self.instance.pk)
+
+            if conflicts_same_day.exists() or conflicts_next_day.exists():
+                c = conflicts_same_day.first() or conflicts_next_day.first()
+                raise serializers.ValidationError({
+                    "detail": f"Solapamiento con turno existente: {c.start_time} - {c.end_time} en {c.date}"
+                })
         else:
             conflicts = Shift.objects.filter(
                 employee=employee,
@@ -287,15 +302,15 @@ class ShiftUpdateSerializer(serializers.Serializer):
                 start_time__lt=end_time,
                 end_time__gt=start_time
             )
-        
-        if self.instance:
-            conflicts = conflicts.exclude(pk=self.instance.pk)
-        
-        if conflicts.exists():
-            c = conflicts.first()
-            raise serializers.ValidationError({
-                "detail": f"Solapamiento con turno existente: {c.start_time} - {c.end_time} en {c.date}"
-            })
+
+            if self.instance:
+                conflicts = conflicts.exclude(pk=self.instance.pk)
+
+            if conflicts.exists():
+                c = conflicts.first()
+                raise serializers.ValidationError({
+                    "detail": f"Solapamiento con turno existente: {c.start_time} - {c.end_time} en {c.date}"
+                })
 
         # ✅ Validar ShiftType
         try:
@@ -381,7 +396,7 @@ class AvailabilitySerializer(serializers.Serializer):
                 start_time__lt='23:59:59',
                 end_time__gt=start_time
             )
-            
+
             next_day = date + timedelta(days=1)
             conflicts_next_day = Availability.objects.filter(
                 employee=employee,
@@ -389,8 +404,16 @@ class AvailabilitySerializer(serializers.Serializer):
                 start_time__lt=end_time,
                 end_time__gt='00:00:00'
             )
-            
-            conflicts = conflicts_same_day.union(conflicts_next_day)
+
+            # Excluir instancia actual en cada queryset
+            if self.instance:
+                conflicts_same_day = conflicts_same_day.exclude(pk=self.instance.pk)
+                conflicts_next_day = conflicts_next_day.exclude(pk=self.instance.pk)
+
+            if conflicts_same_day.exists() or conflicts_next_day.exists():
+                raise serializers.ValidationError({
+                    "detail": "Rango horario inválido o superpuesto"
+                })
         else:
             conflicts = Availability.objects.filter(
                 employee=employee,
@@ -398,14 +421,14 @@ class AvailabilitySerializer(serializers.Serializer):
                 start_time__lt=end_time,
                 end_time__gt=start_time
             )
-        
-        if self.instance:
-            conflicts = conflicts.exclude(pk=self.instance.pk)
-        
-        if conflicts.exists():
-            raise serializers.ValidationError({
-                "detail": "Rango horario inválido o superpuesto"
-            })
+
+            if self.instance:
+                conflicts = conflicts.exclude(pk=self.instance.pk)
+
+            if conflicts.exists():
+                raise serializers.ValidationError({
+                    "detail": "Rango horario inválido o superpuesto"
+                })
         
         data['employee_obj'] = employee
         data['is_overnight'] = is_overnight
