@@ -268,53 +268,25 @@ class ShiftTypeCreateAPIView(APIView):
 @method_decorator(csrf_exempt, name='dispatch')
 class ShiftCreateAPIView(APIView):
     """API para crear turnos desde el frontend (JSON).
-
-    Endpoint: POST /api/shifts/new/
-    Requiere JWT Authentication y devuelve 201 con el turno creado.
     
-    ✅ CORREGIDO: Siempre asume que recibe USER_ID
+    ✅ SIMPLIFICADO: Solo pasa datos al serializer sin procesamiento
     """
     authentication_classes = [JWTAuthentication]
     permission_classes = [permissions.IsAuthenticated]
 
     def post(self, request, *args, **kwargs):
         try:
-            incoming = request.data.copy()
-            emp_val = incoming.get('employee')
+            logging.info(f"📥 [ShiftCreateAPIView] Datos recibidos: {request.data}")
             
-            if emp_val is not None:
-                from .models import Employee as _Employee
-                
-                # ✅ SIEMPRE asumir que viene USER_ID
-                try:
-                    user_id = int(emp_val)
-                    logging.info(f"✅ [ShiftCreateAPIView] Recibido USER_ID: {user_id}")
-                    
-                    # Buscar Employee por user_id
-                    try:
-                        emp_obj = _Employee.objects.get(user__pk=user_id)
-                        incoming['employee'] = emp_obj.pk
-                        logging.info(f"✅ [ShiftCreateAPIView] Employee encontrado: Employee ID={emp_obj.pk} para User ID={user_id}")
-                    except _Employee.DoesNotExist:
-                        # No existe Employee, dejar que el serializer lo cree
-                        logging.info(f"⚠️ [ShiftCreateAPIView] No existe Employee para User ID={user_id}, el serializer lo creará")
-                        # Mantener el user_id para que el serializer lo procese
-                        incoming['employee'] = user_id
-                        
-                except (ValueError, TypeError) as e:
-                    logging.error(f"❌ [ShiftCreateAPIView] Error parseando employee ID: {e}")
-                    return Response(
-                        {'detail': 'ID de empleado inválido'}, 
-                        status=status.HTTP_400_BAD_REQUEST
-                    )
-
-            # Pasar al serializer
-            serializer = ShiftCreateSerializer(data=incoming, context={'request': request})
+            # ✅ NO PROCESAR - Pasar directo al serializer
+            serializer = ShiftCreateSerializer(data=request.data, context={'request': request})
             
             if serializer.is_valid():
                 instance = serializer.save()
                 
-                # Devolver representación simple
+                logging.info(f"✅ Turno creado: ID={instance.id}, Employee ID={instance.employee.id}, User ID={instance.employee.user.id}")
+                
+                # Devolver representación completa
                 return Response({
                     'id': instance.id,
                     'date': instance.date.isoformat() if instance.date else None,
@@ -322,18 +294,17 @@ class ShiftCreateAPIView(APIView):
                     'end_time': instance.end_time.isoformat() if instance.end_time else None,
                     'start': f"{instance.date}T{instance.start_time}" if instance.date and instance.start_time else None,
                     'end': f"{instance.date}T{instance.end_time}" if instance.date and instance.end_time else None,
-                    'employee_id': getattr(instance.employee, 'id', None),
-                    'employee_user_id': getattr(getattr(instance.employee, 'user', None), 'id', None),
-                    'shift_type_id': getattr(instance.shift_type, 'id', None),
+                    'employee_id': instance.employee.id,
+                    'employee_user_id': instance.employee.user.id,
+                    'shift_type_id': instance.shift_type.id,
                     'notes': instance.notes,
                 }, status=status.HTTP_201_CREATED)
             
-            # Loguear detalles para facilitar debugging
-            logging.warning(f"❌ [ShiftCreateAPIView] Petición inválida: {request.data} -> {serializer.errors}")
+            logging.warning(f"❌ Validación fallida: {serializer.errors}")
             return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
             
         except Exception as exc:
-            logging.exception("💥 [ShiftCreateAPIView] Unhandled exception creating Shift via API")
+            logging.exception("💥 Error creando turno")
             if getattr(settings, 'DEBUG', False):
                 return Response({
                     'detail': str(exc), 
@@ -497,52 +468,28 @@ class ShiftListAPIView(APIView):
 class ShiftUpdateAPIView(APIView):
     """API para actualizar un turno existente.
     
-    ✅ CORREGIDO: Siempre asume que recibe USER_ID
+    ✅ SIMPLIFICADO: Solo pasa datos al serializer
     """
     authentication_classes = [JWTAuthentication]
     permission_classes = [permissions.IsAuthenticated]
 
     def put(self, request, pk, *args, **kwargs):
         logging.info(f"🔄 [ShiftUpdateAPIView] Actualizando turno {pk}")
-        logging.info(f"📝 Datos recibidos: {request.data}")
+        logging.info(f"📥 Datos recibidos: {request.data}")
         
         try:
             shift = Shift.objects.get(pk=pk)
-            logging.info(f"✅ Turno encontrado: ID={shift.pk}, Employee={shift.employee.pk}")
+            logging.info(f"✅ Turno encontrado: Shift ID={shift.pk}, Employee ID={shift.employee.pk}, User ID={shift.employee.user.id}")
         except Shift.DoesNotExist:
             return Response({'error': 'Turno no encontrado'}, status=status.HTTP_404_NOT_FOUND)
 
-        # ✅ Procesar employee_id si viene
-        incoming = request.data.copy()
-        emp_val = incoming.get('employee')
-        
-        if emp_val is not None:
-            from .models import Employee as _Employee
-            
-            try:
-                user_id = int(emp_val)
-                logging.info(f"✅ [ShiftUpdateAPIView] Recibido USER_ID: {user_id}")
-                
-                # Buscar Employee por user_id
-                try:
-                    emp_obj = _Employee.objects.get(user__pk=user_id)
-                    incoming['employee'] = emp_obj.pk
-                    logging.info(f"✅ [ShiftUpdateAPIView] Employee encontrado: Employee ID={emp_obj.pk} para User ID={user_id}")
-                except _Employee.DoesNotExist:
-                    # No existe Employee, dejar que el serializer lo cree
-                    logging.info(f"⚠️ [ShiftUpdateAPIView] No existe Employee para User ID={user_id}")
-                    incoming['employee'] = user_id
-                    
-            except (ValueError, TypeError) as e:
-                logging.error(f"❌ [ShiftUpdateAPIView] Error parseando employee ID: {e}")
-
-        # ✅ Pasar la instancia al serializer
-        serializer = ShiftCreateSerializer(instance=shift, data=incoming)
+        # ✅ NO PROCESAR - Pasar directo al serializer
+        serializer = ShiftCreateSerializer(instance=shift, data=request.data)
         
         if serializer.is_valid():
             try:
                 instance = serializer.save()
-                logging.info(f"✅ Turno actualizado exitosamente: {instance.id}")
+                logging.info(f"✅ Turno actualizado: Shift ID={instance.id}, Employee ID={instance.employee.id}, User ID={instance.employee.user.id}")
                 
                 return Response({
                     'id': instance.id,
@@ -551,9 +498,9 @@ class ShiftUpdateAPIView(APIView):
                     'end_time': instance.end_time.isoformat() if instance.end_time else None,
                     'start': f"{instance.date}T{instance.start_time}" if instance.date and instance.start_time else None,
                     'end': f"{instance.date}T{instance.end_time}" if instance.date and instance.end_time else None,
-                    'employee': getattr(instance.employee, 'id', None),
-                    'employee_user_id': getattr(getattr(instance.employee, 'user', None), 'id', None),
-                    'shift_type': getattr(instance.shift_type, 'id', None),
+                    'employee': instance.employee.id,
+                    'employee_user_id': instance.employee.user.id,
+                    'shift_type': instance.shift_type.id,
                     'notes': instance.notes or '',
                 }, status=status.HTTP_200_OK)
                 
