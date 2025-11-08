@@ -237,6 +237,111 @@ class ShiftCreateSerializer(serializers.Serializer):
         logger.info(f"✅ Turno {instance.pk} actualizado - Employee: {instance.employee.id}, User: {instance.employee.user.id}")
         return instance
 
+class ShiftUpdateSerializer(serializers.Serializer):
+    """Serializer específico para ACTUALIZAR turnos - usa EMPLOYEE_ID"""
+    date = serializers.DateField()
+    start_time = serializers.TimeField()
+    end_time = serializers.TimeField()
+    employee = serializers.IntegerField()  # ✅ EMPLOYEE_ID (de la tabla shifts_employee)
+    shift_type = serializers.IntegerField()
+    notes = serializers.CharField(allow_blank=True, required=False)
+    
+    def validate(self, data):
+        from .models import Employee, Shift, ShiftType
+        from datetime import timedelta
+        
+        date = data.get('date')
+        start_time = data.get('start_time')
+        end_time = data.get('end_time')
+        employee_id = data.get('employee')  # ✅ EMPLOYEE_ID
+
+        # ✅ Permitir turnos nocturnos
+        is_overnight_shift = end_time < start_time
+        
+        if not is_overnight_shift and start_time >= end_time:
+            raise serializers.ValidationError(
+                "La hora de inicio debe ser anterior a la de fin para turnos diurnos."
+            )
+
+        # ✅ Validar que employee_id existe
+        try:
+            employee = Employee.objects.get(pk=employee_id)
+            logger.info(f"✅ Employee encontrado: ID={employee.id}, User ID={employee.user.id}")
+        except Employee.DoesNotExist:
+            raise serializers.ValidationError({
+                "employee": f"No existe empleado con ID {employee_id}"
+            })
+
+        # ✅ Validar que está activo
+        if not employee.is_active:
+            raise serializers.ValidationError({
+                "employee": "El empleado no está activo"
+            })
+
+        # ✅ Verificar solapamiento
+        if is_overnight_shift:
+            conflicts_same_day = Shift.objects.filter(
+                employee=employee,
+                date=date,
+                start_time__lt='23:59:59',
+                end_time__gt=start_time
+            )
+            
+            next_day = date + timedelta(days=1)
+            conflicts_next_day = Shift.objects.filter(
+                employee=employee,
+                date=next_day,
+                start_time__lt=end_time,
+                end_time__gt='00:00:00'
+            )
+            
+            conflicts = conflicts_same_day.union(conflicts_next_day)
+        else:
+            conflicts = Shift.objects.filter(
+                employee=employee,
+                date=date,
+                start_time__lt=end_time,
+                end_time__gt=start_time
+            )
+        
+        if self.instance:
+            conflicts = conflicts.exclude(pk=self.instance.pk)
+        
+        if conflicts.exists():
+            c = conflicts.first()
+            raise serializers.ValidationError({
+                "detail": f"Solapamiento con turno existente: {c.start_time} - {c.end_time} en {c.date}"
+            })
+
+        # ✅ Validar ShiftType
+        try:
+            shift_type_obj = ShiftType.objects.get(pk=data.get('shift_type'))
+        except ShiftType.DoesNotExist:
+            raise serializers.ValidationError({
+                "shift_type": "Tipo de turno no encontrado"
+            })
+
+        data['employee_obj'] = employee
+        data['shift_type_obj'] = shift_type_obj
+        data['is_overnight'] = is_overnight_shift
+        return data
+
+    def update(self, instance, validated_data):
+        employee = validated_data['employee_obj']
+        logger.info(f"🔄 Actualizando turno {instance.pk} - Employee ID: {employee.id}, User ID: {employee.user.id}")
+        
+        instance.date = validated_data.get('date', instance.date)
+        instance.start_time = validated_data.get('start_time', instance.start_time)
+        instance.end_time = validated_data.get('end_time', instance.end_time)
+        instance.employee = employee
+        instance.shift_type = validated_data.get('shift_type_obj', instance.shift_type)
+        instance.notes = validated_data.get('notes', instance.notes)
+        
+        instance.full_clean()
+        instance.save()
+        
+        logger.info(f"✅ Turno {instance.pk} actualizado - Employee: {instance.employee.id}, User: {instance.employee.user.id}")
+        return instance
 
 class AvailabilitySerializer(serializers.Serializer):
     """Serializer para crear/actualizar disponibilidades - SOLO EMPLEADOS"""
