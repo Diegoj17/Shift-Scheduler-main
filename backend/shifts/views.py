@@ -359,109 +359,118 @@ class ShiftTypeDeleteAPIView(APIView):
 
 @method_decorator(csrf_exempt, name='dispatch')
 class ShiftListAPIView(APIView):
-    """API ultra-segura para debugging"""
+    """API para listar todos los turnos con información completa"""
     authentication_classes = [JWTAuthentication]
     permission_classes = [permissions.IsAuthenticated]
 
     def get(self, request, *args, **kwargs):
         try:
-            print("🔍 INICIANDO ShiftListAPIView")
+            logger = logging.getLogger(__name__)
+            logger.info("🔍 [ShiftListAPIView] Iniciando...")
+            
+            # Obtener turnos con relaciones precargadas
+            shifts = Shift.objects.select_related(
+                'employee__user', 
+                'shift_type'
+            ).all().order_by('-date', '-start_time')
             
             shifts_data = []
-            shift_count = 0
             
-            try:
-                # Consulta básica
-                shifts = Shift.objects.all()
-                shift_count = shifts.count()
-                print(f"📊 Total shifts encontrados: {shift_count}")
-                
-                for shift in shifts:
-                    try:
-                        print(f"🔄 Procesando shift ID: {shift.id}")
-                        
-                        # Validar datos mínimos
-                        if not shift.date:
-                            print(f"  ⚠️ Shift {shift.id} sin fecha")
-                            continue
-                        if not shift.start_time:
-                            print(f"  ⚠️ Shift {shift.id} sin start_time")
-                            continue
-                        if not shift.end_time:
-                            print(f"  ⚠️ Shift {shift.id} sin end_time")
-                            continue
-                        if not shift.employee:
-                            print(f"  ⚠️ Shift {shift.id} sin employee")
-                            continue
-                        
-                        # Información básica
-                        employee_name = f"Empleado-{shift.employee.id}" if shift.employee else "Sin empleado"
-                        role = "Sin rol"
-                        
-                        # Solo intentar obtener user si employee existe
-                        if shift.employee and hasattr(shift.employee, 'user'):
-                            try:
-                                if shift.employee.user:
-                                    user = shift.employee.user
-                                    first_name = getattr(user, 'first_name', '') or ''
-                                    last_name = getattr(user, 'last_name', '') or ''
-                                    employee_name = f"{first_name} {last_name}".strip() or employee_name
-                                    
-                                    # Manejar puesto de forma segura
-                                    puesto = getattr(user, 'puesto', None)
-                                    if puesto and puesto != "NULL":
-                                        role = puesto
-                                    else:
-                                        role = getattr(shift.employee, 'position', 'Sin rol') or 'Sin rol'
-                            except Exception as user_error:
-                                print(f"  ⚠️ Error obteniendo user para shift {shift.id}: {user_error}")
-                                role = getattr(shift.employee, 'position', 'Sin rol') or 'Sin rol'
-                        
-                        # Tipo de turno
-                        color = '#3788d8'
-                        if shift.shift_type:
-                            color = getattr(shift.shift_type, 'color', '#3788d8') or '#3788d8'
-                        
-                        # Formatear fechas
-                        try:
-                            start_datetime = datetime.combine(shift.date, shift.start_time)
-                            end_datetime = datetime.combine(shift.date, shift.end_time)
-                            
-                            shift_info = {
-                                'id': shift.id,
-                                'title': f"{employee_name} - {role}",
-                                'start': start_datetime.isoformat(),
-                                'end': end_datetime.isoformat(),
-                                'color': color,
-                                'employee': employee_name,
-                                'role': role,
-                            }
-                            
-                            shifts_data.append(shift_info)
-                            print(f"  ✅ Shift {shift.id} procesado: {employee_name}")
-                            
-                        except Exception as date_error:
-                            print(f"  ❌ Error con fechas en shift {shift.id}: {date_error}")
-                            continue
-                            
-                    except Exception as shift_error:
-                        print(f"  💥 Error grave en shift {shift.id}: {shift_error}")
+            for shift in shifts:
+                try:
+                    # Validar datos mínimos
+                    if not all([shift.date, shift.start_time, shift.end_time, shift.employee]):
+                        logger.warning(f"⚠️ Shift {shift.id} con datos incompletos")
                         continue
-                
-                print(f"🎯 FINALIZADO: {len(shifts_data)} shifts procesados exitosamente")
-                return Response(shifts_data)
-                
-            except Exception as query_error:
-                print(f"💥 ERROR en consulta principal: {query_error}")
-                return Response({"error": "Error en consulta de datos"}, status=500)
-                
-        except Exception as global_error:
-            print(f"💥💥 ERROR GLOBAL: {global_error}")
-            import traceback
-            print(traceback.format_exc())
-            return Response(
-                {"error": "Error interno del servidor"}, 
-                status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+                    
+                    # ✅ CRÍTICO: Obtener IDs correctos
+                    employee_id = shift.employee.id                     # Employee ID (BD)
+                    user_id = shift.employee.user.id if shift.employee.user else None  # User ID
+                    
+                    logger.info(f"📊 Shift {shift.id}: employee_id={employee_id}, user_id={user_id}")
+                    
+                    # Información del empleado
+                    employee_name = "Sin nombre"
+                    role = "Sin rol"
+                    
+                    if shift.employee.user:
+                        user = shift.employee.user
+                        first_name = getattr(user, 'first_name', '') or ''
+                        last_name = getattr(user, 'last_name', '') or ''
+                        employee_name = f"{first_name} {last_name}".strip() or user.email
+                        
+                        # Rol/Puesto
+                        puesto = getattr(user, 'puesto', None)
+                        if puesto and puesto != "NULL":
+                            role = puesto
+                        else:
+                            role = getattr(shift.employee, 'position', 'Sin rol') or 'Sin rol'
+                    
+                    # Tipo de turno
+                    color = '#3788d8'
+                    shift_type_name = 'Sin tipo'
+                    shift_type_id = None
+                    
+                    if shift.shift_type:
+                        color = getattr(shift.shift_type, 'color', '#3788d8') or '#3788d8'
+                        shift_type_name = shift.shift_type.name
+                        shift_type_id = shift.shift_type.id
+                    
+                    # Formatear fechas
+                    start_datetime = datetime.combine(shift.date, shift.start_time)
+                    end_datetime = datetime.combine(shift.date, shift.end_time)
+                    
+                    shift_info = {
+                        'id': shift.id,
+                        'title': f"{employee_name} - {role}",
+                        'start': start_datetime.isoformat(),
+                        'end': end_datetime.isoformat(),
+                        'color': color,
+                        
+                        # ✅ CRÍTICO: Información del empleado
+                        'employee': employee_name,
+                        'employee_id': employee_id,           # Employee ID (referencia BD)
+                        'employee_user_id': user_id,          # ✅ USER_ID (para enviar al backend)
+                        'employeeId': employee_id,            # Compatibilidad
+                        'employeeUserId': user_id,            # ✅ Para frontend
+                        'role': role,
+                        
+                        # ✅ Información del tipo de turno
+                        'shift_type_id': shift_type_id,
+                        'shift_type_name': shift_type_name,
+                        'shiftTypeId': shift_type_id,         # Compatibilidad
+                        'shiftTypeName': shift_type_name,     # Compatibilidad
+                        
+                        # ✅ Campos adicionales para edición
+                        'date': shift.date.isoformat(),
+                        'start_time': shift.start_time.isoformat(),
+                        'end_time': shift.end_time.isoformat(),
+                        'startTime': shift.start_time.isoformat(),  # Compatibilidad
+                        'endTime': shift.end_time.isoformat(),      # Compatibilidad
+                        'notes': shift.notes or '',
+                    }
+                    
+                    shifts_data.append(shift_info)
+                    logger.debug(f"✅ Shift {shift.id}: employee_id={employee_id}, user_id={user_id}")
+                    
+                except Exception as shift_error:
+                    logger.exception(f"💥 Error procesando shift {shift.id}: {shift_error}")
+                    continue
+            
+            logger.info(f"✅ [ShiftListAPIView] Retornando {len(shifts_data)} turnos")
+            return Response(shifts_data, status=status.HTTP_200_OK)
+            
+        except Exception as exc:
+            logger.exception("💥 [ShiftListAPIView] Error global")
+            if getattr(settings, 'DEBUG', False):
+                return Response({
+                    'error': 'Error interno del servidor',
+                    'detail': str(exc),
+                    'traceback': traceback.format_exc()
+                }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+            return Response({
+                'error': 'Error interno del servidor'
+            }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
 @method_decorator(csrf_exempt, name='dispatch')
