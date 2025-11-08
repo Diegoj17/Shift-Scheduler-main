@@ -84,11 +84,11 @@ class Employee(models.Model):
         return f"{self.user.first_name} {self.user.last_name}"
 
 class Shift(models.Model):
-    date = models.DateField(null=True, blank=True)
-    start_time = models.TimeField(null=True, blank=True)
-    end_time = models.TimeField(null=True, blank=True)
-    employee = models.ForeignKey(Employee, on_delete=models.CASCADE, null=True, blank=True)
-    shift_type = models.ForeignKey(ShiftType, on_delete=models.CASCADE, null=True, blank=True)
+    date = models.DateField()
+    start_time = models.TimeField()
+    end_time = models.TimeField()
+    employee = models.ForeignKey(Employee, on_delete=models.CASCADE)
+    shift_type = models.ForeignKey(ShiftType, on_delete=models.CASCADE)
     notes = models.TextField(blank=True, null=True)
     
     class Meta:
