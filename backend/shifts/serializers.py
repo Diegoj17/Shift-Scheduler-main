@@ -97,54 +97,58 @@ class ShiftCreateSerializer(serializers.Serializer):
                 "La hora de inicio debe ser anterior a la de fin para turnos diurnos."
             )
 
-        # ✅ Validar que user_id sea válido
+        # El campo `employee` puede venir como USER_ID o como EMPLOYEE_ID.
+        # Primero intentamos interpretarlo como Employee.pk (caso más probable desde el frontend).
         try:
-            user_id = int(user_id)
+            incoming_id = int(user_id)
         except (TypeError, ValueError):
             raise serializers.ValidationError({
-                "employee": f"ID de usuario inválido: {user_id}"
+                "employee": f"ID inválido: {user_id}"
             })
 
-        logger.info(f"🔍 [ShiftCreateSerializer] Procesando USER_ID: {user_id}")
-        
-        # ✅ PASO 1: Verificar que el usuario existe
-        try:
-            user = User.objects.get(pk=user_id)
-            logger.info(f"✅ User encontrado: ID={user.id}, Email={user.email}")
-        except User.DoesNotExist:
-            raise serializers.ValidationError({
-                "employee": f"No existe usuario con ID {user_id}"
-            })
+        logger.info(f"🔍 [ShiftCreateSerializer] Procesando ID entrante: {incoming_id} (puede ser Employee.pk o User.pk)")
 
-        # ✅ PASO 2: BUSCAR Employee existente por user
-        # NUNCA crear automáticamente, solo buscar
+        employee = None
+
+        # 1) Intentar encontrar Employee por PK
         try:
-            employee = Employee.objects.get(user=user)
-            logger.info(f"✅ Employee EXISTENTE encontrado: Employee ID={employee.id} para User ID={user_id}")
+            employee = Employee.objects.get(pk=incoming_id)
+            logger.info(f"✅ Employee encontrado por PK: Employee ID={employee.id}, User ID={employee.user.id}")
         except Employee.DoesNotExist:
-            # ✅ NO EXISTE - Crear UNA SOLA VEZ usando get_or_create para evitar duplicados
-            logger.info(f"⚠️ No existe Employee para User ID={user_id}, creando...")
-            
-            with transaction.atomic():
-                employee, created = Employee.objects.select_for_update().get_or_create(
-                    user=user,
-                    defaults={
-                        'position': getattr(user, 'puesto', None) or 'Sin especificar',
-                        'is_active': True
-                    }
-                )
-                
-                if created:
-                    logger.info(f"✅ Employee CREADO: ID={employee.id} para User={user.email}")
-                else:
-                    logger.info(f"✅ Employee ya existía (creado por otro proceso): ID={employee.id}")
-        
-        except Employee.MultipleObjectsReturned:
-            # ❌ DUPLICADOS - Error crítico
-            logger.error(f"❌ DUPLICADOS: User {user_id} tiene múltiples Employees!")
-            raise serializers.ValidationError({
-                "employee": "Error: Usuario con múltiples perfiles de empleado. Contacte al administrador para limpiar la base de datos."
-            })
+            # 2) Si no existe Employee con ese PK, tratar el valor como User.pk
+            try:
+                user = User.objects.get(pk=incoming_id)
+                logger.info(f"✅ User encontrado: ID={user.id}, Email={getattr(user, 'email', None)}")
+            except User.DoesNotExist:
+                raise serializers.ValidationError({
+                    "employee": f"No existe Employee ni User con ID {incoming_id}"
+                })
+
+            # Buscar Employee relacionado con el User
+            emp_qs = Employee.objects.filter(user=user)
+            emp_count = emp_qs.count()
+            if emp_count > 1:
+                logger.error(f"❌ DUPLICADOS: User {incoming_id} tiene {emp_count} Employees!")
+                raise serializers.ValidationError({
+                    "employee": "Error: Usuario con múltiples perfiles de empleado. Contacte al administrador para limpiar la base de datos."
+                })
+
+            employee = emp_qs.first()
+            if not employee:
+                # Crear Employee si no existe (una sola vez atomically)
+                logger.info(f"⚠️ No existe Employee para User ID={user.id}, creando...")
+                with transaction.atomic():
+                    employee, created = Employee.objects.select_for_update().get_or_create(
+                        user=user,
+                        defaults={
+                            'position': getattr(user, 'puesto', None) or 'Sin especificar',
+                            'is_active': True
+                        }
+                    )
+                    if created:
+                        logger.info(f"✅ Employee CREADO: ID={employee.id} para User={user.email}")
+                    else:
+                        logger.info(f"✅ Employee ya existía (creado por otro proceso): ID={employee.id}")
 
         # ✅ Validar que está activo
         if not employee.is_active:
