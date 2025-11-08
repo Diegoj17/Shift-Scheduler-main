@@ -63,10 +63,22 @@ class ShiftType(models.Model):
         verbose_name_plural = "Tipos de Turno"
 
 class Employee(models.Model):
-    # Enlazar al modelo de usuario configurado en settings.AUTH_USER_MODEL
-    user = models.OneToOneField(settings.AUTH_USER_MODEL, on_delete=models.CASCADE)
+    user = models.OneToOneField(
+        settings.AUTH_USER_MODEL, 
+        on_delete=models.CASCADE,
+        unique=True  # ✅ CRÍTICO: Asegurar que cada User tenga solo un Employee
+    )
     position = models.CharField(max_length=100)
     is_active = models.BooleanField(default=True)
+    
+    class Meta:
+        # ✅ Agregar constraint a nivel de base de datos
+        constraints = [
+            models.UniqueConstraint(
+                fields=['user'],
+                name='unique_employee_per_user'
+            )
+        ]
     
     def __str__(self):
         return f"{self.user.first_name} {self.user.last_name}"
