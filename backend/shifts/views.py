@@ -499,7 +499,7 @@ class ShiftUpdateAPIView(APIView):
         logging.info(f"🔍 DEBUG - ShiftType ID recibido: {request.data.get('shift_type')}")
 
         try:
-            serializer = ShiftCreateSerializer(instance=shift, data=request.data)
+            serializer = ShiftUpdateSerializer(instance=shift, data=request.data)
             
             if serializer.is_valid():
                 logging.info("✅ Serializer válido, procediendo a guardar...")
