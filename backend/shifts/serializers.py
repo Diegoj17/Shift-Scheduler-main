@@ -82,8 +82,6 @@ class ShiftCreateSerializer(serializers.Serializer):
         from django.contrib.auth import get_user_model
         from django.db import transaction
         from datetime import timedelta
-        from django.conf import settings as _dj_settings
-
         User = get_user_model()
 
         date = data.get('date')
@@ -93,7 +91,7 @@ class ShiftCreateSerializer(serializers.Serializer):
 
         # ✅ Permitir turnos nocturnos
         is_overnight_shift = end_time < start_time
-
+        
         if not is_overnight_shift and start_time >= end_time:
             raise serializers.ValidationError(
                 "La hora de inicio debe ser anterior a la de fin para turnos diurnos."
@@ -108,7 +106,7 @@ class ShiftCreateSerializer(serializers.Serializer):
             })
 
         logger.info(f"🔍 [ShiftCreateSerializer] Procesando USER_ID: {user_id}")
-
+        
         # ✅ PASO 1: Verificar que el usuario existe
         try:
             user = User.objects.get(pk=user_id)
@@ -119,40 +117,34 @@ class ShiftCreateSerializer(serializers.Serializer):
             })
 
         # ✅ PASO 2: BUSCAR Employee existente por user
-        # Evitar crear automáticamente en producción. Detectar duplicados y requerir limpieza manual.
-        emp_qs = Employee.objects.filter(user=user)
-        emp_count = emp_qs.count()
-        if emp_count > 1:
-            logger.error(f"❌ DUPLICADOS: User {user_id} tiene {emp_count} Employees!")
+        # NUNCA crear automáticamente, solo buscar
+        try:
+            employee = Employee.objects.get(user=user)
+            logger.info(f"✅ Employee EXISTENTE encontrado: Employee ID={employee.id} para User ID={user_id}")
+        except Employee.DoesNotExist:
+            # ✅ NO EXISTE - Crear UNA SOLA VEZ usando get_or_create para evitar duplicados
+            logger.info(f"⚠️ No existe Employee para User ID={user_id}, creando...")
+            
+            with transaction.atomic():
+                employee, created = Employee.objects.select_for_update().get_or_create(
+                    user=user,
+                    defaults={
+                        'position': getattr(user, 'puesto', None) or 'Sin especificar',
+                        'is_active': True
+                    }
+                )
+                
+                if created:
+                    logger.info(f"✅ Employee CREADO: ID={employee.id} para User={user.email}")
+                else:
+                    logger.info(f"✅ Employee ya existía (creado por otro proceso): ID={employee.id}")
+        
+        except Employee.MultipleObjectsReturned:
+            # ❌ DUPLICADOS - Error crítico
+            logger.error(f"❌ DUPLICADOS: User {user_id} tiene múltiples Employees!")
             raise serializers.ValidationError({
                 "employee": "Error: Usuario con múltiples perfiles de empleado. Contacte al administrador para limpiar la base de datos."
             })
-
-        employee = emp_qs.first()
-        if not employee:
-            # En DEBUG permitimos crear Employee automáticamente para desarrollo local
-            if getattr(_dj_settings, 'DEBUG', False):
-                logger.info(f"⚠️ DEBUG: No existe Employee para User ID={user_id}, creando automáticamente...")
-                with transaction.atomic():
-                    employee, created = Employee.objects.select_for_update().get_or_create(
-                        user=user,
-                        defaults={
-                            'position': getattr(user, 'puesto', None) or 'Sin especificar',
-                            'is_active': True
-                        }
-                    )
-                    if created:
-                        logger.info(f"✅ Employee CREADO: ID={employee.id} para User={user.email}")
-                    else:
-                        logger.info(f"✅ Employee ya existía (creado por otro proceso): ID={employee.id}")
-            else:
-                # En producción nunca crear automáticamente
-                raise serializers.ValidationError({
-                    'employee': (
-                        'Empleado no encontrado. En producción no se crean perfiles automáticamente. '
-                        'Cree el Employee en el panel de administración o contacte al administrador.'
-                    )
-                })
 
         # ✅ Validar que está activo
         if not employee.is_active:
@@ -160,16 +152,15 @@ class ShiftCreateSerializer(serializers.Serializer):
                 "employee": "El empleado no está activo"
             })
 
-        # ✅ CORREGIDO: Verificar solapamiento - SIN usar .union()
+        # ✅ Verificar solapamiento
         if is_overnight_shift:
-            # Para turnos nocturnos, comprobar conflictos en cada parte por separado
             conflicts_same_day = Shift.objects.filter(
                 employee=employee,
                 date=date,
                 start_time__lt='23:59:59',
                 end_time__gt=start_time
             )
-
+            
             next_day = date + timedelta(days=1)
             conflicts_next_day = Shift.objects.filter(
                 employee=employee,
@@ -177,41 +168,24 @@ class ShiftCreateSerializer(serializers.Serializer):
                 start_time__lt=end_time,
                 end_time__gt='00:00:00'
             )
-
-            # Excluir instancia actual en cada queryset (exclude no soportado sobre union)
-            if self.instance:
-                conflicts_same_day = conflicts_same_day.exclude(pk=self.instance.pk)
-                conflicts_next_day = conflicts_next_day.exclude(pk=self.instance.pk)
-
-            if conflicts_same_day.exists():
-                c = conflicts_same_day.first()
-                raise serializers.ValidationError({
-                    "detail": f"Solapamiento con turno existente: {c.start_time} - {c.end_time} en {c.date}"
-                })
-
-            if conflicts_next_day.exists():
-                c = conflicts_next_day.first()
-                raise serializers.ValidationError({
-                    "detail": f"Solapamiento con turno existente: {c.start_time} - {c.end_time} en {c.date}"
-                })
-                
+            
+            conflicts = conflicts_same_day.union(conflicts_next_day)
         else:
-            # Para turnos diurnos
             conflicts = Shift.objects.filter(
                 employee=employee,
                 date=date,
                 start_time__lt=end_time,
                 end_time__gt=start_time
             )
-            
-            if self.instance:
-                conflicts = conflicts.exclude(pk=self.instance.pk)
-            
-            if conflicts.exists():
-                c = conflicts.first()
-                raise serializers.ValidationError({
-                    "detail": f"Solapamiento con turno existente: {c.start_time} - {c.end_time} en {c.date}"
-                })
+        
+        if self.instance:
+            conflicts = conflicts.exclude(pk=self.instance.pk)
+        
+        if conflicts.exists():
+            c = conflicts.first()
+            raise serializers.ValidationError({
+                "detail": f"Solapamiento con turno existente: {c.start_time} - {c.end_time} en {c.date}"
+            })
 
         # ✅ Validar ShiftType
         try:
@@ -227,39 +201,39 @@ class ShiftCreateSerializer(serializers.Serializer):
         return data
 
     def create(self, validated_data):
-        """Crea una instancia de Shift usando los objetos preparados en validate()."""
         from .models import Shift
 
+        employee = validated_data['employee_obj']
+        logger.info(f"📝 Creando turno - Employee ID: {employee.id}, User ID: {employee.user.id}")
+        
         shift = Shift(
             date=validated_data['date'],
             start_time=validated_data['start_time'],
             end_time=validated_data['end_time'],
-            employee=validated_data['employee_obj'],
+            employee=employee,
             shift_type=validated_data['shift_type_obj'],
             notes=validated_data.get('notes', '')
         )
-
-        # Validar modelo y guardar
         shift.full_clean()
         shift.save()
+        
+        logger.info(f"✅ Turno creado exitosamente: Shift ID={shift.id}, Employee ID={shift.employee.id}, User ID={shift.employee.user.id}")
         return shift
 
     def update(self, instance, validated_data):
-        """Actualizar una instancia de Shift (por si este serializer se usa en PUT)."""
-        # Reutilizar la lógica de ShiftUpdateSerializer.update
         employee = validated_data['employee_obj']
-        logger.info(f"🔄 Actualizando turno {instance.pk} - Employee ID: {employee.id}, User ID: {employee.user.id}")
-
+        logger.info(f"🔄 Actualizando turno {instance.pk} - Nuevo Employee ID: {employee.id}, User ID: {employee.user.id}")
+        
         instance.date = validated_data.get('date', instance.date)
         instance.start_time = validated_data.get('start_time', instance.start_time)
         instance.end_time = validated_data.get('end_time', instance.end_time)
         instance.employee = employee
         instance.shift_type = validated_data.get('shift_type_obj', instance.shift_type)
         instance.notes = validated_data.get('notes', instance.notes)
-
+        
         instance.full_clean()
         instance.save()
-
+        
         logger.info(f"✅ Turno {instance.pk} actualizado - Employee: {instance.employee.id}, User: {instance.employee.user.id}")
         return instance
 
