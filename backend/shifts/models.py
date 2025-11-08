@@ -176,3 +176,100 @@ class Shift(models.Model):
     def __str__(self):
         period = self.get_shift_period()
         return f"{self.employee} - {self.date} {self.start_time}-{self.end_time} ({period})"
+    
+class Availability(models.Model):
+    """
+    Modelo para registrar disponibilidad/no disponibilidad de empleados.
+    Los empleados registran rangos horarios donde pueden o no trabajar.
+    """
+    TYPE_CHOICES = [
+        ('available', 'Disponible'),
+        ('unavailable', 'No Disponible'),
+    ]
+    
+    employee = models.ForeignKey(Employee, on_delete=models.CASCADE, related_name='availabilities')
+    date = models.DateField()
+    start_time = models.TimeField()
+    end_time = models.TimeField()
+    type = models.CharField(max_length=20, choices=TYPE_CHOICES, default='available')
+    notes = models.TextField(blank=True, null=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    
+    class Meta:
+        db_table = 'shifts_availability'
+        verbose_name = "Disponibilidad"
+        verbose_name_plural = "Disponibilidades"
+        ordering = ['date', 'start_time']
+        # Un empleado no puede tener múltiples registros idénticos
+        unique_together = ['employee', 'date', 'start_time', 'type']
+    
+    def clean(self):
+        """Validaciones del modelo"""
+        from django.core.exceptions import ValidationError
+        from datetime import timedelta
+        
+        # ✅ Permitir turnos nocturnos (cuando end_time < start_time)
+        if self.start_time == self.end_time:
+            raise ValidationError("La hora de inicio y fin no pueden ser iguales")
+        
+        # ✅ Validar solapamiento con otras disponibilidades del mismo empleado
+        is_overnight = self.end_time < self.start_time
+        
+        if is_overnight:
+            # Para registros nocturnos, verificar solapamiento en dos partes
+            conflicts_same_day = Availability.objects.filter(
+                employee=self.employee,
+                date=self.date,
+                start_time__lt='23:59:59',
+                end_time__gt=self.start_time
+            ).exclude(pk=self.pk if self.pk else None)
+            
+            next_day = self.date + timedelta(days=1)
+            conflicts_next_day = Availability.objects.filter(
+                employee=self.employee,
+                date=next_day,
+                start_time__lt=self.end_time,
+                end_time__gt='00:00:00'
+            ).exclude(pk=self.pk if self.pk else None)
+            
+            if conflicts_same_day.exists() or conflicts_next_day.exists():
+                raise ValidationError("Ya existe un registro de disponibilidad que se solapa con este horario")
+        else:
+            # Para registros diurnos
+            conflicts = Availability.objects.filter(
+                employee=self.employee,
+                date=self.date
+            ).exclude(pk=self.pk if self.pk else None).filter(
+                models.Q(start_time__lt=self.end_time, end_time__gt=self.start_time)
+            )
+            
+            if conflicts.exists():
+                raise ValidationError("Ya existe un registro de disponibilidad que se solapa con este horario")
+    
+    def is_overnight(self):
+        """Determina si el registro cruza medianoche"""
+        return self.end_time < self.start_time
+    
+    def duration_hours(self):
+        """Calcula la duración en horas"""
+        from datetime import datetime, timedelta
+        
+        if self.is_overnight():
+            start_dt = datetime.combine(self.date, self.start_time)
+            end_dt = datetime.combine(self.date + timedelta(days=1), self.end_time)
+            duration = (end_dt - start_dt).total_seconds() / 3600
+        else:
+            start_dt = datetime.combine(self.date, self.start_time)
+            end_dt = datetime.combine(self.date, self.end_time)
+            duration = (end_dt - start_dt).total_seconds() / 3600
+        
+        return duration
+    
+    def get_color(self):
+        """Retorna el color según el tipo"""
+        return '#22543d' if self.type == 'available' else '#742a2a'
+    
+    def __str__(self):
+        type_display = "Disponible" if self.type == 'available' else "No Disponible"
+        return f"{self.employee} - {self.date} {self.start_time}-{self.end_time} ({type_display})"

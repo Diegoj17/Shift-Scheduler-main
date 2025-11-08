@@ -713,3 +713,444 @@ class MyShiftsAPIView(APIView):
                     'traceback': traceback.format_exc()
                 }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
             return Response({'results': [], 'error': 'Error interno del servidor'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+@method_decorator(csrf_exempt, name='dispatch')
+class AvailabilityCreateAPIView(APIView):
+    """
+    API para que SOLO EMPLEADOS registren su disponibilidad.
+    POST /api/shifts/availability/new/
+    """
+    authentication_classes = [JWTAuthentication]
+    permission_classes = [permissions.IsAuthenticated]
+    
+    def post(self, request, *args, **kwargs):
+        logger = logging.getLogger(__name__)
+        
+        try:
+            user = request.user
+            logger.info(f"📝 [AvailabilityCreate] Usuario: {user.email}, Rol: {user.role}")
+            
+            # ✅ SOLO EMPLEADOS pueden crear disponibilidad
+            if user.role in ['ADMIN', 'GERENTE']:
+                return Response({
+                    'detail': 'Solo los empleados pueden crear registros de disponibilidad'
+                }, status=status.HTTP_403_FORBIDDEN)
+            
+            # Verificar que el usuario tenga perfil de empleado
+            try:
+                employee = Employee.objects.get(user=user)
+            except Employee.DoesNotExist:
+                return Response({
+                    'detail': 'No se encontró perfil de empleado para este usuario'
+                }, status=status.HTTP_404_NOT_FOUND)
+            
+            logger.info(f"📝 Datos recibidos: {request.data}")
+            
+            serializer = AvailabilitySerializer(data=request.data, context={'request': request})
+            
+            if serializer.is_valid():
+                instance = serializer.save()
+                
+                # Construir respuesta
+                response_data = {
+                    'id': instance.id,
+                    'date': instance.date.isoformat(),
+                    'start_time': instance.start_time.isoformat(),
+                    'end_time': instance.end_time.isoformat(),
+                    'type': instance.type,
+                    'color': instance.get_color(),
+                    'notes': instance.notes or '',
+                    'employee': instance.employee.id,
+                    'employee_name': f"{instance.employee.user.first_name} {instance.employee.user.last_name}".strip(),
+                    'duration_hours': instance.duration_hours()
+                }
+                
+                logger.info(f"✅ Disponibilidad creada: ID={instance.id}")
+                return Response(response_data, status=status.HTTP_201_CREATED)
+            
+            logger.warning(f"❌ Validación fallida: {serializer.errors}")
+            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+            
+        except Exception as exc:
+            logger.exception("💥 Error al crear disponibilidad")
+            if getattr(settings, 'DEBUG', False):
+                return Response({
+                    'detail': str(exc),
+                    'traceback': traceback.format_exc()
+                }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+            return Response({
+                'detail': 'Error al crear disponibilidad'
+            }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+@method_decorator(csrf_exempt, name='dispatch')
+class AvailabilityListAPIView(APIView):
+    """
+    API para listar disponibilidades.
+    GET /api/shifts/availability/
+    
+    - EMPLEADOS: Solo ven sus propias disponibilidades
+    - GERENTE/ADMIN: Pueden ver disponibilidades de todos
+    
+    Filtros opcionales (solo para GERENTE/ADMIN):
+    - start_date: Fecha inicio (YYYY-MM-DD)
+    - end_date: Fecha fin (YYYY-MM-DD)
+    - employee: ID del empleado
+    - type: available o unavailable
+    """
+    authentication_classes = [JWTAuthentication]
+    permission_classes = [permissions.IsAuthenticated]
+    
+    def get(self, request, *args, **kwargs):
+        from .models import Availability
+        logger = logging.getLogger(__name__)
+        
+        try:
+            user = request.user
+            logger.info(f"🔍 [AvailabilityList] Usuario: {user.email}, Rol: {user.role}")
+            
+            # ✅ Si es EMPLEADO, solo ver sus propias disponibilidades
+            if user.role == 'EMPLEADO':
+                try:
+                    employee = Employee.objects.get(user=user)
+                    availabilities = Availability.objects.filter(employee=employee)
+                    logger.info(f"👤 Empleado viendo sus disponibilidades: {availabilities.count()}")
+                except Employee.DoesNotExist:
+                    return Response({
+                        'results': [],
+                        'message': 'No se encontró perfil de empleado'
+                    }, status=status.HTTP_200_OK)
+            else:
+                # ✅ GERENTE/ADMIN pueden ver todas (solo consulta)
+                availabilities = Availability.objects.all()
+                logger.info(f"👔 Gerente/Admin consultando todas las disponibilidades: {availabilities.count()}")
+            
+            # ✅ Aplicar filtros (solo para GERENTE/ADMIN)
+            if user.role in ['ADMIN', 'GERENTE']:
+                start_date = request.query_params.get('start_date')
+                end_date = request.query_params.get('end_date')
+                employee_id = request.query_params.get('employee')
+                availability_type = request.query_params.get('type')
+                
+                if start_date:
+                    try:
+                        start_date_obj = datetime.fromisoformat(start_date).date()
+                        availabilities = availabilities.filter(date__gte=start_date_obj)
+                        logger.info(f"📅 Filtrado desde: {start_date_obj}")
+                    except (ValueError, TypeError):
+                        pass
+                
+                if end_date:
+                    try:
+                        end_date_obj = datetime.fromisoformat(end_date).date()
+                        availabilities = availabilities.filter(date__lte=end_date_obj)
+                        logger.info(f"📅 Filtrado hasta: {end_date_obj}")
+                    except (ValueError, TypeError):
+                        pass
+                
+                if employee_id:
+                    availabilities = availabilities.filter(employee_id=employee_id)
+                    logger.info(f"👤 Filtrado por empleado: {employee_id}")
+                
+                if availability_type in ['available', 'unavailable']:
+                    availabilities = availabilities.filter(type=availability_type)
+                    logger.info(f"🏷️ Filtrado por tipo: {availability_type}")
+            
+            availabilities = availabilities.select_related('employee__user').order_by('date', 'start_time')
+            
+            # ✅ Serializar resultados
+            serializer = AvailabilityListSerializer(availabilities, many=True)
+            
+            logger.info(f"✅ Retornando {len(serializer.data)} disponibilidades")
+            return Response({'results': serializer.data}, status=status.HTTP_200_OK)
+            
+        except Exception as exc:
+            logger.exception("💥 Error al listar disponibilidades")
+            if getattr(settings, 'DEBUG', False):
+                return Response({
+                    'results': [],
+                    'error': str(exc),
+                    'traceback': traceback.format_exc()
+                }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+            return Response({
+                'results': [],
+                'error': 'Error interno del servidor'
+            }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+@method_decorator(csrf_exempt, name='dispatch')
+class AvailabilityUpdateAPIView(APIView):
+    """
+    API para actualizar una disponibilidad.
+    PUT /api/shifts/availability/<id>/edit/
+    
+    ✅ SOLO el empleado DUEÑO puede editar su propia disponibilidad
+    ❌ Gerentes/Admin NO pueden editar
+    """
+    authentication_classes = [JWTAuthentication]
+    permission_classes = [permissions.IsAuthenticated]
+    
+    def put(self, request, pk, *args, **kwargs):
+        from .models import Availability
+        logger = logging.getLogger(__name__)
+        
+        try:
+            user = request.user
+            
+            # ✅ GERENTE/ADMIN no pueden editar disponibilidades
+            if user.role in ['ADMIN', 'GERENTE']:
+                return Response({
+                    'detail': 'Solo los empleados pueden editar registros de disponibilidad'
+                }, status=status.HTTP_403_FORBIDDEN)
+            
+            availability = Availability.objects.get(pk=pk)
+            
+            # ✅ Verificar que el empleado sea el dueño
+            if availability.employee.user != user:
+                return Response({
+                    'detail': 'No tienes permiso para editar esta disponibilidad'
+                }, status=status.HTTP_403_FORBIDDEN)
+            
+            logger.info(f"🔄 [AvailabilityUpdate] Usuario {user.email} editando disponibilidad {pk}")
+            
+            serializer = AvailabilitySerializer(
+                instance=availability,
+                data=request.data,
+                context={'request': request}
+            )
+            
+            if serializer.is_valid():
+                instance = serializer.save()
+                
+                response_data = {
+                    'id': instance.id,
+                    'date': instance.date.isoformat(),
+                    'start_time': instance.start_time.isoformat(),
+                    'end_time': instance.end_time.isoformat(),
+                    'type': instance.type,
+                    'color': instance.get_color(),
+                    'notes': instance.notes or '',
+                    'employee': instance.employee.id
+                }
+                
+                logger.info(f"✅ Disponibilidad actualizada: ID={instance.id}")
+                return Response(response_data, status=status.HTTP_200_OK)
+            
+            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+            
+        except Availability.DoesNotExist:
+            return Response({
+                'error': 'Disponibilidad no encontrada'
+            }, status=status.HTTP_404_NOT_FOUND)
+        except Exception as exc:
+            logger.exception("💥 Error al actualizar disponibilidad")
+            if getattr(settings, 'DEBUG', False):
+                return Response({
+                    'detail': str(exc),
+                    'traceback': traceback.format_exc()
+                }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+            return Response({
+                'detail': 'Error al actualizar disponibilidad'
+            }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+@method_decorator(csrf_exempt, name='dispatch')
+class AvailabilityDeleteAPIView(APIView):
+    """
+    API para eliminar una disponibilidad.
+    DELETE /api/shifts/availability/<id>/delete/
+    
+    ✅ SOLO el empleado DUEÑO puede eliminar su propia disponibilidad
+    ❌ Gerentes/Admin NO pueden eliminar
+    """
+    authentication_classes = [JWTAuthentication]
+    permission_classes = [permissions.IsAuthenticated]
+    
+    def delete(self, request, pk, *args, **kwargs):
+        from .models import Availability
+        logger = logging.getLogger(__name__)
+        
+        try:
+            user = request.user
+            
+            # ✅ GERENTE/ADMIN no pueden eliminar disponibilidades
+            if user.role in ['ADMIN', 'GERENTE']:
+                return Response({
+                    'detail': 'Solo los empleados pueden eliminar registros de disponibilidad'
+                }, status=status.HTTP_403_FORBIDDEN)
+            
+            availability = Availability.objects.get(pk=pk)
+            
+            # ✅ Verificar que el empleado sea el dueño
+            if availability.employee.user != user:
+                return Response({
+                    'detail': 'No tienes permiso para eliminar esta disponibilidad'
+                }, status=status.HTTP_403_FORBIDDEN)
+            
+            logger.info(f"🗑️ [AvailabilityDelete] Usuario {user.email} eliminando disponibilidad {pk}")
+            
+            availability.delete()
+            logger.info(f"✅ Disponibilidad eliminada: ID={pk}")
+            
+            return Response({
+                'message': 'Disponibilidad eliminada exitosamente'
+            }, status=status.HTTP_204_NO_CONTENT)
+            
+        except Availability.DoesNotExist:
+            return Response({
+                'error': 'Disponibilidad no encontrada'
+            }, status=status.HTTP_404_NOT_FOUND)
+        except Exception as exc:
+            logger.exception("💥 Error al eliminar disponibilidad")
+            if getattr(settings, 'DEBUG', False):
+                return Response({
+                    'detail': str(exc),
+                    'traceback': traceback.format_exc()
+                }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+            return Response({
+                'detail': 'Error al eliminar disponibilidad'
+            }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+@method_decorator(csrf_exempt, name='dispatch')
+class CheckEmployeeAvailabilityAPIView(APIView):
+    """
+    API para verificar si un empleado está disponible en un horario específico.
+    POST /api/shifts/availability/check/
+    
+    ✅ GERENTE/ADMIN pueden verificar disponibilidad de cualquier empleado
+    ✅ EMPLEADOS pueden verificar su propia disponibilidad
+    
+    Body: {
+        "employee": employee_id,
+        "date": "YYYY-MM-DD",
+        "start_time": "HH:MM",
+        "end_time": "HH:MM"
+    }
+    
+    Response: {
+        "is_available": true/false,
+        "message": "...",
+        "conflicts": [...],
+        "color": "#22543d" o "#742a2a"
+    }
+    """
+    authentication_classes = [JWTAuthentication]
+    permission_classes = [permissions.IsAuthenticated]
+    
+    def post(self, request, *args, **kwargs):
+        from .models import Availability
+        from datetime import datetime, timedelta
+        logger = logging.getLogger(__name__)
+        
+        try:
+            user = request.user
+            employee_id = request.data.get('employee')
+            date_str = request.data.get('date')
+            start_time_str = request.data.get('start_time')
+            end_time_str = request.data.get('end_time')
+            
+            if not all([employee_id, date_str, start_time_str, end_time_str]):
+                return Response({
+                    'error': 'Faltan parámetros requeridos'
+                }, status=status.HTTP_400_BAD_REQUEST)
+            
+            try:
+                employee = Employee.objects.get(pk=employee_id)
+                
+                # ✅ Si es EMPLEADO, solo puede verificar su propia disponibilidad
+                if user.role == 'EMPLEADO':
+                    if employee.user != user:
+                        return Response({
+                            'detail': 'Solo puedes verificar tu propia disponibilidad'
+                        }, status=status.HTTP_403_FORBIDDEN)
+                
+                date_obj = datetime.fromisoformat(date_str).date()
+                start_time_obj = datetime.fromisoformat(f"{date_str}T{start_time_str}").time()
+                end_time_obj = datetime.fromisoformat(f"{date_str}T{end_time_str}").time()
+            except Employee.DoesNotExist:
+                return Response({
+                    'error': 'Empleado no encontrado'
+                }, status=status.HTTP_404_NOT_FOUND)
+            except Exception as e:
+                return Response({
+                    'error': f'Datos inválidos: {str(e)}'
+                }, status=status.HTTP_400_BAD_REQUEST)
+            
+            logger.info(f"🔍 [CheckAvailability] Verificando empleado {employee_id} para {date_str} {start_time_str}-{end_time_str}")
+            
+            # ✅ Buscar disponibilidades del empleado en esa fecha
+            is_overnight = end_time_obj < start_time_obj
+            
+            if is_overnight:
+                # Turno nocturno
+                availabilities_same_day = Availability.objects.filter(
+                    employee=employee,
+                    date=date_obj,
+                    start_time__lt='23:59:59',
+                    end_time__gt=start_time_obj
+                )
+                
+                next_day = date_obj + timedelta(days=1)
+                availabilities_next_day = Availability.objects.filter(
+                    employee=employee,
+                    date=next_day,
+                    start_time__lt=end_time_obj,
+                    end_time__gt='00:00:00'
+                )
+                
+                availabilities = availabilities_same_day.union(availabilities_next_day)
+            else:
+                # Turno diurno
+                availabilities = Availability.objects.filter(
+                    employee=employee,
+                    date=date_obj,
+                    start_time__lt=end_time_obj,
+                    end_time__gt=start_time_obj
+                )
+            
+            # ✅ Determinar disponibilidad
+            has_unavailable = availabilities.filter(type='unavailable').exists()
+            has_available = availabilities.filter(type='available').exists()
+            
+            if has_unavailable:
+                # Hay un registro de NO disponible
+                conflicts = list(availabilities.filter(type='unavailable').values(
+                    'id', 'date', 'start_time', 'end_time', 'type', 'notes'
+                ))
+                logger.info(f"❌ Empleado NO disponible - {len(conflicts)} conflictos")
+                return Response({
+                    'is_available': False,
+                    'message': 'El empleado NO está disponible en este horario',
+                    'conflicts': conflicts,
+                    'color': '#742a2a'
+                }, status=status.HTTP_200_OK)
+            elif has_available:
+                # Hay un registro de disponible
+                logger.info(f"✅ Empleado disponible (registro explícito)")
+                return Response({
+                    'is_available': True,
+                    'message': 'El empleado está disponible en este horario',
+                    'conflicts': [],
+                    'color': '#22543d'
+                }, status=status.HTTP_200_OK)
+            else:
+                # No hay registros - se asume disponible por defecto
+                logger.info(f"✅ Empleado disponible (sin registros, asumido)")
+                return Response({
+                    'is_available': True,
+                    'message': 'No hay registros de disponibilidad (asumido disponible)',
+                    'conflicts': [],
+                    'color': '#22543d'
+                }, status=status.HTTP_200_OK)
+            
+        except Exception as exc:
+            logger.exception("💥 Error verificando disponibilidad")
+            if getattr(settings, 'DEBUG', False):
+                return Response({
+                    'error': str(exc),
+                    'traceback': traceback.format_exc()
+                }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+            return Response({
+                'error': 'Error interno del servidor'
+            }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
