@@ -226,6 +226,43 @@ class ShiftCreateSerializer(serializers.Serializer):
         data['is_overnight'] = is_overnight_shift
         return data
 
+    def create(self, validated_data):
+        """Crea una instancia de Shift usando los objetos preparados en validate()."""
+        from .models import Shift
+
+        shift = Shift(
+            date=validated_data['date'],
+            start_time=validated_data['start_time'],
+            end_time=validated_data['end_time'],
+            employee=validated_data['employee_obj'],
+            shift_type=validated_data['shift_type_obj'],
+            notes=validated_data.get('notes', '')
+        )
+
+        # Validar modelo y guardar
+        shift.full_clean()
+        shift.save()
+        return shift
+
+    def update(self, instance, validated_data):
+        """Actualizar una instancia de Shift (por si este serializer se usa en PUT)."""
+        # Reutilizar la lógica de ShiftUpdateSerializer.update
+        employee = validated_data['employee_obj']
+        logger.info(f"🔄 Actualizando turno {instance.pk} - Employee ID: {employee.id}, User ID: {employee.user.id}")
+
+        instance.date = validated_data.get('date', instance.date)
+        instance.start_time = validated_data.get('start_time', instance.start_time)
+        instance.end_time = validated_data.get('end_time', instance.end_time)
+        instance.employee = employee
+        instance.shift_type = validated_data.get('shift_type_obj', instance.shift_type)
+        instance.notes = validated_data.get('notes', instance.notes)
+
+        instance.full_clean()
+        instance.save()
+
+        logger.info(f"✅ Turno {instance.pk} actualizado - Employee: {instance.employee.id}, User: {instance.employee.user.id}")
+        return instance
+
 class ShiftUpdateSerializer(serializers.Serializer):
     """Serializer específico para ACTUALIZAR turnos - usa EMPLOYEE_ID"""
     date = serializers.DateField()
