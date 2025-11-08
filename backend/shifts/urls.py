@@ -17,5 +17,10 @@ urlpatterns = [
     path('shift-types/<int:pk>/edit/', views.ShiftTypeUpdateAPIView.as_view(), name='shifttype_api_edit'),
     path('shift-types/<int:pk>/delete/', views.ShiftTypeDeleteAPIView.as_view(), name='shifttype_api_delete'),
     
-    
+    # Disponibilidad de Empleados
+    path('availability/', views.AvailabilityListAPIView.as_view(), name='availability_list'),
+    path('availability/new/', views.AvailabilityCreateAPIView.as_view(), name='availability_create'),
+    path('availability/<int:pk>/edit/', views.AvailabilityUpdateAPIView.as_view(), name='availability_edit'),
+    path('availability/<int:pk>/delete/', views.AvailabilityDeleteAPIView.as_view(), name='availability_delete'),
+    path('availability/check/', views.CheckEmployeeAvailabilityAPIView.as_view(), name='availability_check'),
 ]
