@@ -475,54 +475,57 @@ class ShiftListAPIView(APIView):
 
 @method_decorator(csrf_exempt, name='dispatch')
 class ShiftUpdateAPIView(APIView):
-    """API para actualizar un turno existente usando EMPLOYEE_ID"""
+    """API para actualizar un turno existente."""
     authentication_classes = [JWTAuthentication]
     permission_classes = [permissions.IsAuthenticated]
 
     def put(self, request, pk, *args, **kwargs):
-        logging.info(f"🔄 [ShiftUpdateAPIView] Actualizando turno {pk}")
+        logging.info(f"🔄 [ShiftUpdateAPIView] Iniciando actualización del turno {pk}")
         logging.info(f"📥 Datos recibidos: {request.data}")
         
         try:
             shift = Shift.objects.get(pk=pk)
-            logging.info(f"✅ Turno encontrado: Shift ID={shift.pk}, Employee ID={shift.employee.pk}, User ID={shift.employee.user.id}")
+            logging.info(f"✅ Turno encontrado: ID={shift.id}, Employee ID={shift.employee.id}, User ID={shift.employee.user.id}")
         except Shift.DoesNotExist:
+            logging.error(f"❌ Turno {pk} no encontrado")
             return Response({'error': 'Turno no encontrado'}, status=status.HTTP_404_NOT_FOUND)
+        except Exception as e:
+            logging.error(f"❌ Error buscando turno: {str(e)}")
+            return Response({'error': 'Error interno'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
-        # ✅ USAR ShiftUpdateSerializer que espera EMPLOYEE_ID
-        serializer = ShiftUpdateSerializer(instance=shift, data=request.data)
-        
-        if serializer.is_valid():
-            try:
+        # ✅ LOG DETALLADO para debugging
+        logging.info(f"🔍 DEBUG - Employee ID recibido: {request.data.get('employee')}")
+        logging.info(f"🔍 DEBUG - Employee actual: {shift.employee.id}")
+        logging.info(f"🔍 DEBUG - ShiftType ID recibido: {request.data.get('shift_type')}")
+
+        try:
+            serializer = ShiftCreateSerializer(instance=shift, data=request.data)
+            
+            if serializer.is_valid():
+                logging.info("✅ Serializer válido, procediendo a guardar...")
                 instance = serializer.save()
-                logging.info(f"✅ Turno actualizado: Shift ID={instance.id}, Employee ID={instance.employee.id}, User ID={instance.employee.user.id}")
                 
+                logging.info(f"✅ Turno actualizado exitosamente: ID={instance.id}")
                 return Response({
                     'id': instance.id,
-                    'date': instance.date.isoformat() if instance.date else None,
-                    'start_time': instance.start_time.isoformat() if instance.start_time else None,
-                    'end_time': instance.end_time.isoformat() if instance.end_time else None,
-                    'start': f"{instance.date}T{instance.start_time}" if instance.date and instance.start_time else None,
-                    'end': f"{instance.date}T{instance.end_time}" if instance.date and instance.end_time else None,
-                    'employee': instance.employee.id,  # ✅ employee_id
-                    'employee_user_id': instance.employee.user.id,  # ✅ user_id
+                    'date': instance.date.isoformat(),
+                    'start_time': instance.start_time.isoformat(),
+                    'end_time': instance.end_time.isoformat(),
+                    'employee': instance.employee.id,
+                    'employee_user_id': instance.employee.user.id,
                     'shift_type': instance.shift_type.id,
                     'notes': instance.notes or '',
                 }, status=status.HTTP_200_OK)
+            else:
+                logging.error(f"❌ Errores de validación: {serializer.errors}")
+                return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
                 
-            except Exception as exc:
-                logging.exception("💥 Error al actualizar turno")
-                if getattr(settings, 'DEBUG', False):
-                    return Response({
-                        'detail': str(exc), 
-                        'traceback': traceback.format_exc()
-                    }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
-                return Response({
-                    'detail': 'Error al actualizar turno'
-                }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
-
-        logging.error(f"❌ Errores de validación: {serializer.errors}")
-        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+        except Exception as exc:
+            logging.exception("💥 Error CRÍTICO al actualizar turno")
+            return Response({
+                'detail': 'Error interno del servidor al actualizar turno',
+                'error': str(exc)
+            }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
 @method_decorator(csrf_exempt, name='dispatch')
