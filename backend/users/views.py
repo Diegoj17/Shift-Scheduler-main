@@ -1,3 +1,5 @@
+# users/views.py
+
 import time
 import threading
 import logging
@@ -12,6 +14,7 @@ from django.contrib.auth.tokens import PasswordResetTokenGenerator
 from rest_framework import status, permissions, generics, serializers
 from rest_framework.response import Response
 from rest_framework.views import APIView
+from rest_framework.decorators import api_view, permission_classes
 from rest_framework_simplejwt.tokens import RefreshToken
 from .serializers import (
     LoginSerializer, 
@@ -576,6 +579,82 @@ class AdminUserAccessView(APIView):
         }, status=200)
         response["Access-Control-Allow-Origin"] = request.headers.get('Origin', '*')
         return response
+
+
+# ✅ NUEVO: Endpoint para obtener todos los usuarios para turnos
+@api_view(['GET'])
+@permission_classes([permissions.IsAuthenticated])
+def get_all_users_for_shifts(request):
+    """
+    Endpoint para obtener TODOS los usuarios activos del sistema.
+    Muestra si tienen o no perfil de Employee.
+    
+    GET /api/auth/users/for-shifts/
+    
+    Retorna:
+    [
+        {
+            "user_id": 6,
+            "employee_id": 1,  // o null si no tiene
+            "has_employee": true,  // o false
+            "name": "Diego Jaimes",
+            "position": "Supervisor de Turnos",
+            "departamento": "Operaciones",
+            "email": "diego@example.com",
+            "role": "EMPLEADO"
+        },
+        ...
+    ]
+    """
+    try:
+        from shifts.models import Employee
+        
+        # Obtener todos los usuarios activos
+        users = User.objects.filter(status='ACTIVE').order_by('first_name', 'last_name')
+        
+        data = []
+        for user in users:
+            # Construir nombre completo
+            full_name = f"{user.first_name} {user.last_name}".strip()
+            if not full_name:
+                full_name = user.email
+            
+            # Construir posición
+            position = getattr(user, 'puesto', None) or 'Sin puesto'
+            departamento = getattr(user, 'departamento', None) or 'Sin departamento'
+            
+            # ✅ Verificar si tiene Employee (sin crearlo)
+            try:
+                employee = Employee.objects.get(user=user)
+                employee_id = employee.id
+                has_employee = True
+            except Employee.DoesNotExist:
+                employee_id = None
+                has_employee = False
+            
+            user_data = {
+                'user_id': user.id,                     # ✅ USER_ID (para enviar al backend)
+                'employee_id': employee_id,             # ✅ EMPLOYEE_ID (si existe)
+                'has_employee': has_employee,           # ℹ️ Flag informativo
+                'name': full_name,
+                'position': position,
+                'departamento': departamento,
+                'email': user.email,
+                'role': user.role
+            }
+            
+            data.append(user_data)
+        
+        return Response(data, status=200)
+        
+    except Exception as exc:
+        import logging
+        import traceback
+        logging.getLogger('users').exception("Error obteniendo usuarios para turnos")
+        return Response({
+            'error': str(exc),
+            'traceback': traceback.format_exc()
+        }, status=500)
 
 
 # Vista CSRF mejorada
