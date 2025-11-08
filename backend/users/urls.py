@@ -12,6 +12,7 @@ from .views import (
     AdminBlockUserView,
     AdminUserAccessView,
     AdminListNonGerenteUsersView,
+    get_all_users_for_shifts,
     csrf,
     cors_preflight
 )
@@ -53,6 +54,8 @@ urlpatterns = [
     path("users/<int:pk>/update/", AdminUpdateUserView.as_view(), name="user-update-admin"),
     path("users/<int:pk>/block/", AdminBlockUserView.as_view(), name="user-block-admin"),
     path("users/<int:pk>/access/", AdminUserAccessView.as_view(), name="user-access-admin"),
+    
+    path("users/for-shifts/", get_all_users_for_shifts, name="users-for-shifts"),
     
     # CSRF y CORS
     path("csrf/", csrf, name="csrf-cookie"),
