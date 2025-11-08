@@ -14,7 +14,7 @@ from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import status, permissions
 from rest_framework_simplejwt.authentication import JWTAuthentication
-from .serializers import ShiftTypeSerializer, ShiftCreateSerializer
+from .serializers import ShiftTypeSerializer, ShiftCreateSerializer, ShiftSerializer, AvailabilitySerializer, AvailabilityListSerializer
 import logging
 import traceback
 from django.conf import settings
