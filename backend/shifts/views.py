@@ -645,6 +645,10 @@ class MyShiftsAPIView(APIView):
 
     def get(self, request, *args, **kwargs):
         import logging
+        from django.utils import timezone
+        import pytz
+        from datetime import datetime, timedelta
+        
         logger = logging.getLogger(__name__)
         
         try:
@@ -656,7 +660,7 @@ class MyShiftsAPIView(APIView):
                 employee = Employee.objects.get(user=user)
                 logger.info(f"✅ [MyShiftsAPIView] Employee encontrado: ID={employee.id}, Position={employee.position}")
                 
-                # ✅ OBTENER PARÁMETROS DE FILTRO
+                # ✅ OBTENER PARÁMETROS DE FILTRO CON ZONA HORARIA CORRECTA
                 start_date = request.query_params.get('start_date')
                 end_date = request.query_params.get('end_date')
                 
@@ -667,20 +671,26 @@ class MyShiftsAPIView(APIView):
                     'shift_type', 'employee__user'
                 )
                 
-                # ✅ APLICAR FILTROS DE FECHA
+                # ✅ APLICAR FILTROS DE FECHA CON ZONA HORARIA LOCAL
+                local_tz = pytz.timezone(settings.TIME_ZONE)  # 'America/Bogota'
+                
                 if start_date:
                     try:
-                        start_date_obj = datetime.fromisoformat(start_date).date()
-                        shifts_qs = shifts_qs.filter(date__gte=start_date_obj)
-                        logger.info(f"📅 Filtrado desde: {start_date_obj}, Turnos después del filtro: {shifts_qs.count()}")
+                        # Convertir a datetime con zona horaria local
+                        start_date_naive = datetime.fromisoformat(start_date)
+                        start_date_local = local_tz.localize(start_date_naive)
+                        shifts_qs = shifts_qs.filter(date__gte=start_date_local.date())
+                        logger.info(f"📅 Filtrado desde: {start_date_local.date()}")
                     except (ValueError, TypeError) as e:
                         logger.warning(f"⚠️ Error al parsear start_date: {e}")
                 
                 if end_date:
                     try:
-                        end_date_obj = datetime.fromisoformat(end_date).date()
-                        shifts_qs = shifts_qs.filter(date__lte=end_date_obj)
-                        logger.info(f"📅 Filtrado hasta: {end_date_obj}, Turnos después del filtro: {shifts_qs.count()}")
+                        # Convertir a datetime con zona horaria local
+                        end_date_naive = datetime.fromisoformat(end_date)
+                        end_date_local = local_tz.localize(end_date_naive)
+                        shifts_qs = shifts_qs.filter(date__lte=end_date_local.date())
+                        logger.info(f"📅 Filtrado hasta: {end_date_local.date()}")
                     except (ValueError, TypeError) as e:
                         logger.warning(f"⚠️ Error al parsear end_date: {e}")
                 
@@ -690,35 +700,51 @@ class MyShiftsAPIView(APIView):
                 total_shifts = shifts_qs.count()
                 logger.info(f"📊 [MyShiftsAPIView] Total de turnos después de filtros: {total_shifts}")
                 
+                # ✅ Obtener la fecha/hora actual en la zona horaria local para filtrar turnos futuros
+                now_local = timezone.now().astimezone(local_tz)
+                
                 # Construir respuesta
                 results = []
                 for s in shifts_qs:
-                    # Obtener información del empleado
-                    employee_position = s.employee.position if s.employee else None
-                    user_obj = s.employee.user if s.employee else None
-                    employee_name = f"{user_obj.first_name or ''} {user_obj.last_name or ''}".strip() if user_obj else None
+                    # ✅ Calcular si el turno tiene más de 24 horas de anticipación
+                    shift_datetime_naive = datetime.combine(s.date, s.start_time)
+                    shift_datetime_local = local_tz.localize(shift_datetime_naive)
                     
-                    shift_data = {
-                        'id': s.id,
-                        'date': s.date.isoformat() if s.date else None,
-                        'start_time': s.start_time.isoformat() if s.start_time else None,
-                        'end_time': s.end_time.isoformat() if s.end_time else None,
-                        'start': f"{s.date}T{s.start_time}" if s.date and s.start_time else None,
-                        'end': f"{s.date}T{s.end_time}" if s.date and s.end_time else None,
-                        'employee': s.employee.id,
-                        'employee_name': employee_name,
-                        'employee_position': employee_position,  
-                        'shift_type': s.shift_type.id if s.shift_type else None,
-                        'shift_type_name': getattr(s.shift_type, 'name', None),
-                        'shift_type_color': getattr(s.shift_type, 'color', None),
-                        'notes': s.notes or '',
-                        'status': 'confirmed'
-                    }
-                    results.append(shift_data)
+                    # Calcular diferencia en horas
+                    time_diff = shift_datetime_local - now_local
+                    hours_until_shift = time_diff.total_seconds() / 3600
                     
-                    logger.info(f"📋 Turno {s.id}: Fecha={s.date}, Position={employee_position}")
+                    # Solo incluir turnos con más de 24 horas de anticipación
+                    if hours_until_shift >= 24:
+                        # Obtener información del empleado
+                        employee_position = s.employee.position if s.employee else None
+                        user_obj = s.employee.user if s.employee else None
+                        employee_name = f"{user_obj.first_name or ''} {user_obj.last_name or ''}".strip() if user_obj else None
+                        
+                        shift_data = {
+                            'id': s.id,
+                            'date': s.date.isoformat() if s.date else None,
+                            'start_time': s.start_time.isoformat() if s.start_time else None,
+                            'end_time': s.end_time.isoformat() if s.end_time else None,
+                            'start': f"{s.date}T{s.start_time}" if s.date and s.start_time else None,
+                            'end': f"{s.date}T{s.end_time}" if s.date and s.end_time else None,
+                            'employee': s.employee.id,
+                            'employee_name': employee_name,
+                            'employee_position': employee_position,  
+                            'shift_type': s.shift_type.id if s.shift_type else None,
+                            'shift_type_name': getattr(s.shift_type, 'name', None),
+                            'shift_type_color': getattr(s.shift_type, 'color', None),
+                            'notes': s.notes or '',
+                            'status': 'confirmed',
+                            'hours_until_shift': hours_until_shift  # Para debugging
+                        }
+                        results.append(shift_data)
+                        
+                        logger.info(f"📋 Turno {s.id}: Fecha={s.date}, Horas hasta turno={hours_until_shift:.1f}")
+                    else:
+                        logger.info(f"⏰ Turno {s.id} excluido: Muy pronto (horas hasta turno={hours_until_shift:.1f})")
                 
-                logger.info(f"✅ [MyShiftsAPIView] Retornando {len(results)} turnos")
+                logger.info(f"✅ [MyShiftsAPIView] Retornando {len(results)} turnos válidos")
                 return Response({'results': results}, status=status.HTTP_200_OK)
                 
             except Employee.DoesNotExist:
@@ -1679,40 +1705,90 @@ class EmployeeShiftsAPIView(APIView):
             }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
             
 @method_decorator(csrf_exempt, name='dispatch')
-class EmployeeListAPIView(APIView):
+class EmployeeShiftsAPIView(APIView):
     """
-    API para listar empleados activos.
-    GET /api/shifts/employees/
+    API para obtener turnos de un empleado específico (para intercambios).
+    GET /api/shifts/employees/<employee_id>/shifts/
+    
+    Retorna solo turnos futuros (>24h) que sean válidos para intercambio.
     """
     authentication_classes = [JWTAuthentication]
     permission_classes = [permissions.IsAuthenticated]
     
-    def get(self, request, *args, **kwargs):
+    def get(self, request, employee_id, *args, **kwargs):
+        from django.utils import timezone
+        import pytz
+        
         logger = logging.getLogger(__name__)
         
         try:
-            # Obtener solo empleados activos
-            employees = Employee.objects.filter(is_active=True).select_related('user')
+            user = request.user
+            logger.info(f"🔍 [EmployeeShifts] Usuario: {user.email} consultando turnos de empleado {employee_id}")
             
-            results = []
-            for emp in employees:
-                # No incluir al usuario actual en la lista
-                if emp.user == request.user:
-                    continue
+            # Verificar que el empleado exista
+            try:
+                target_employee = Employee.objects.get(pk=employee_id)
+            except Employee.DoesNotExist:
+                return Response({
+                    'results': [],
+                    'error': 'Empleado no encontrado'
+                }, status=status.HTTP_404_NOT_FOUND)
+            
+            # ✅ Obtener fecha actual en zona horaria local
+            local_tz = pytz.timezone(settings.TIME_ZONE)
+            now_local = timezone.now().astimezone(local_tz)
+            
+            # Obtener turnos del empleado (próximos 60 días)
+            from datetime import timedelta
+            today = now_local.date()
+            limit_date = today + timedelta(days=60)
+            
+            # Obtener turnos del empleado
+            shifts = Shift.objects.filter(
+                employee=target_employee,
+                date__gte=today,
+                date__lte=limit_date
+            ).select_related('shift_type').order_by('date', 'start_time')
+            
+            # ✅ Filtrar solo turnos con >24h de anticipación usando zona horaria local
+            valid_shifts = []
+            for shift in shifts:
+                shift_datetime_naive = datetime.combine(shift.date, shift.start_time)
+                shift_datetime_local = local_tz.localize(shift_datetime_naive)
                 
-                emp_data = {
-                    'id': emp.id,
-                    'name': f"{emp.user.first_name} {emp.user.last_name}".strip() or emp.user.email,
-                    'position': emp.position or getattr(emp.user, 'puesto', None) or 'Sin puesto',
-                    'user_id': emp.user.id
-                }
-                results.append(emp_data)
+                hours_until = (shift_datetime_local - now_local).total_seconds() / 3600
+                
+                if hours_until >= 24:
+                    valid_shifts.append(shift)
             
-            logger.info(f"✅ Retornando {len(results)} empleados")
+            logger.info(f"✅ Turnos válidos encontrados: {len(valid_shifts)}")
+            
+            # Serializar resultados
+            results = []
+            for shift in valid_shifts:
+                shift_data = {
+                    'id': shift.id,
+                    'date': shift.date.isoformat(),
+                    'start_time': shift.start_time.isoformat(),
+                    'end_time': shift.end_time.isoformat(),
+                    'shift_type_id': shift.shift_type.id if shift.shift_type else None,
+                    'shift_type_name': shift.shift_type.name if shift.shift_type else 'Sin tipo',
+                    'shift_type_color': shift.shift_type.color if shift.shift_type else '#3788d8',
+                    'employee_id': shift.employee.id,
+                    'employee_name': f"{shift.employee.user.first_name} {shift.employee.user.last_name}".strip()
+                }
+                results.append(shift_data)
+            
             return Response({'results': results}, status=status.HTTP_200_OK)
             
         except Exception as exc:
-            logger.exception("💥 Error listando empleados")
+            logger.exception("💥 Error obteniendo turnos del empleado")
+            if getattr(settings, 'DEBUG', False):
+                return Response({
+                    'results': [],
+                    'error': str(exc),
+                    'traceback': traceback.format_exc()
+                }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
             return Response({
                 'results': [],
                 'error': 'Error interno del servidor'
