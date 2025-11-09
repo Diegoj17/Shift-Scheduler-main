@@ -14,7 +14,7 @@ from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import status, permissions
 from rest_framework_simplejwt.authentication import JWTAuthentication
-from .serializers import ShiftTypeSerializer, ShiftCreateSerializer, ShiftUpdateSerializer, ShiftSerializer, AvailabilitySerializer, AvailabilityListSerializer, TimeEntrySerializer, TimeEntryListSerializer
+from .serializers import ShiftTypeSerializer, ShiftCreateSerializer, ShiftUpdateSerializer, ShiftSerializer, AvailabilitySerializer, AvailabilityListSerializer, TimeEntrySerializer, TimeEntryListSerializer, ShiftChangeRequestListSerializer, ShiftChangeRequestSerializer, ShiftChangeRequestReviewSerializer
 import logging
 import traceback
 from django.conf import settings
@@ -1364,4 +1364,194 @@ class MyLastTimeEntryAPIView(APIView):
             logger.exception("💥 Error al obtener último registro")
             return Response({
                 'error': 'Error interno del servidor'
+            }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+            
+@method_decorator(csrf_exempt, name='dispatch')
+class ShiftChangeRequestCreateAPIView(APIView):
+    """
+    API para que EMPLEADOS creen solicitudes de cambio.
+    POST /api/shifts/change-requests/new/
+    """
+    authentication_classes = [JWTAuthentication]
+    permission_classes = [permissions.IsAuthenticated]
+    
+    def post(self, request, *args, **kwargs):
+        logger = logging.getLogger(__name__)
+        
+        try:
+            user = request.user
+            logger.info(f"📝 [ShiftChangeRequest] Usuario: {user.email}")
+            
+            serializer = ShiftChangeRequestSerializer(
+                data=request.data,
+                context={'request': request}
+            )
+            
+            if serializer.is_valid():
+                instance = serializer.save()
+                
+                response_data = {
+                    'id': instance.id,
+                    'status': instance.status,
+                    'created_at': instance.created_at.isoformat(),
+                    'message': 'Solicitud enviada exitosamente'
+                }
+                
+                logger.info(f"✅ Solicitud creada: ID={instance.id}")
+                return Response(response_data, status=status.HTTP_201_CREATED)
+            
+            logger.warning(f"❌ Validación fallida: {serializer.errors}")
+            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+            
+        except Exception as exc:
+            logger.exception("💥 Error al crear solicitud")
+            if getattr(settings, 'DEBUG', False):
+                return Response({
+                    'detail': str(exc),
+                    'traceback': traceback.format_exc()
+                }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+            return Response({
+                'detail': 'Error al crear solicitud'
+            }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+@method_decorator(csrf_exempt, name='dispatch')
+class ShiftChangeRequestListAPIView(APIView):
+    """
+    API para listar solicitudes.
+    GET /api/shifts/change-requests/
+    
+    - EMPLEADOS: Solo ven sus propias solicitudes
+    - GERENTE/ADMIN: Ven todas las solicitudes
+    
+    Filtros:
+    - status: pending, approved, rejected
+    """
+    authentication_classes = [JWTAuthentication]
+    permission_classes = [permissions.IsAuthenticated]
+    
+    def get(self, request, *args, **kwargs):
+        from .models import ShiftChangeRequest, Employee
+        logger = logging.getLogger(__name__)
+        
+        try:
+            user = request.user
+            logger.info(f"🔍 [ShiftChangeRequestList] Usuario: {user.email}, Rol: {user.role}")
+            
+            # ✅ Si es EMPLEADO, solo ver sus solicitudes
+            if user.role == 'EMPLEADO':
+                try:
+                    employee = Employee.objects.get(user=user)
+                    requests_qs = ShiftChangeRequest.objects.filter(requesting_employee=employee)
+                    logger.info(f"👤 Empleado viendo sus solicitudes: {requests_qs.count()}")
+                except Employee.DoesNotExist:
+                    return Response({
+                        'results': [],
+                        'message': 'No se encontró perfil de empleado'
+                    }, status=status.HTTP_200_OK)
+            else:
+                # ✅ GERENTE/ADMIN pueden ver todas
+                requests_qs = ShiftChangeRequest.objects.all()
+                logger.info(f"👔 Gerente consultando todas las solicitudes: {requests_qs.count()}")
+            
+            # ✅ Aplicar filtros
+            status_filter = request.query_params.get('status')
+            if status_filter in ['pending', 'approved', 'rejected']:
+                requests_qs = requests_qs.filter(status=status_filter)
+            
+            requests_qs = requests_qs.select_related(
+                'requesting_employee__user',
+                'original_shift__shift_type',
+                'proposed_employee__user',
+                'proposed_shift',
+                'reviewed_by'
+            ).order_by('-created_at')
+            
+            # ✅ Serializar
+            serializer = ShiftChangeRequestListSerializer(requests_qs, many=True)
+            
+            logger.info(f"✅ Retornando {len(serializer.data)} solicitudes")
+            return Response({'results': serializer.data}, status=status.HTTP_200_OK)
+            
+        except Exception as exc:
+            logger.exception("💥 Error listando solicitudes")
+            if getattr(settings, 'DEBUG', False):
+                return Response({
+                    'results': [],
+                    'error': str(exc),
+                    'traceback': traceback.format_exc()
+                }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+            return Response({
+                'results': [],
+                'error': 'Error interno del servidor'
+            }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+@method_decorator(csrf_exempt, name='dispatch')
+class ShiftChangeRequestReviewAPIView(APIView):
+    """
+    API para que GERENTES aprueben/rechacen solicitudes.
+    PUT /api/shifts/change-requests/<id>/review/
+    """
+    authentication_classes = [JWTAuthentication]
+    permission_classes = [permissions.IsAuthenticated]
+    
+    def put(self, request, pk, *args, **kwargs):
+        from .models import ShiftChangeRequest
+        logger = logging.getLogger(__name__)
+        
+        try:
+            user = request.user
+            
+            # ✅ Verificar rol
+            if user.role not in ['ADMIN', 'GERENTE']:
+                return Response({
+                    'detail': 'Solo gerentes pueden revisar solicitudes'
+                }, status=status.HTTP_403_FORBIDDEN)
+            
+            try:
+                change_request = ShiftChangeRequest.objects.get(pk=pk)
+            except ShiftChangeRequest.DoesNotExist:
+                return Response({
+                    'error': 'Solicitud no encontrada'
+                }, status=status.HTTP_404_NOT_FOUND)
+            
+            # ✅ Verificar que esté pendiente
+            if change_request.status != 'pending':
+                return Response({
+                    'detail': f'La solicitud ya fue {change_request.get_status_display()}'
+                }, status=status.HTTP_400_BAD_REQUEST)
+            
+            logger.info(f"🔄 [Review] Gerente {user.email} revisando solicitud {pk}")
+            
+            serializer = ShiftChangeRequestReviewSerializer(
+                instance=change_request,
+                data=request.data,
+                context={'request': request}
+            )
+            
+            if serializer.is_valid():
+                instance = serializer.save()
+                
+                response_data = {
+                    'id': instance.id,
+                    'status': instance.status,
+                    'manager_comment': instance.manager_comment,
+                    'reviewed_at': instance.reviewed_at.isoformat() if instance.reviewed_at else None
+                }
+                
+                logger.info(f"✅ Solicitud revisada: ID={instance.id}, Estado={instance.status}")
+                return Response(response_data, status=status.HTTP_200_OK)
+            
+            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+            
+        except Exception as exc:
+            logger.exception("💥 Error revisando solicitud")
+            if getattr(settings, 'DEBUG', False):
+                return Response({
+                    'detail': str(exc),
+                    'traceback': traceback.format_exc()
+                }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+            return Response({
+                'detail': 'Error al revisar solicitud'
             }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)

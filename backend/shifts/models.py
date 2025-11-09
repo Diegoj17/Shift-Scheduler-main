@@ -337,3 +337,126 @@ class TimeEntry(models.Model):
     def time(self):
         """Hora del registro en zona horaria local"""
         return self.timestamp_local.time()
+    
+class ShiftChangeRequest(models.Model):
+    """
+    Modelo para solicitudes de cambio de turno.
+    Un empleado solicita cambiar su turno asignado.
+    """
+    STATUS_CHOICES = [
+        ('pending', 'Pendiente'),
+        ('approved', 'Aprobado'),
+        ('rejected', 'Rechazado'),
+    ]
+    
+    # Empleado que solicita el cambio
+    requesting_employee = models.ForeignKey(
+        Employee, 
+        on_delete=models.CASCADE, 
+        related_name='shift_change_requests'
+    )
+    
+    # Turno que quiere cambiar
+    original_shift = models.ForeignKey(
+        Shift, 
+        on_delete=models.CASCADE, 
+        related_name='change_requests_as_original'
+    )
+    
+    # Compañero propuesto para intercambio (opcional)
+    proposed_employee = models.ForeignKey(
+        Employee, 
+        on_delete=models.SET_NULL, 
+        null=True, 
+        blank=True,
+        related_name='shift_change_proposals'
+    )
+    
+    # Turno del compañero propuesto (opcional)
+    proposed_shift = models.ForeignKey(
+        Shift,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='change_requests_as_proposed'
+    )
+    
+    # Motivo de la solicitud
+    reason = models.TextField()
+    
+    # Estado de la solicitud
+    status = models.CharField(
+        max_length=20, 
+        choices=STATUS_CHOICES, 
+        default='pending'
+    )
+    
+    # Comentario del gerente (para aprobación/rechazo)
+    manager_comment = models.TextField(blank=True, null=True)
+    
+    # Gerente que revisó
+    reviewed_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='reviewed_shift_changes'
+    )
+    
+    # Fechas
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    reviewed_at = models.DateTimeField(null=True, blank=True)
+    
+    class Meta:
+        db_table = 'shifts_shiftchangerequest'
+        verbose_name = "Solicitud de Cambio de Turno"
+        verbose_name_plural = "Solicitudes de Cambio de Turno"
+        ordering = ['-created_at']
+    
+    def clean(self):
+        """Validaciones del modelo"""
+        from django.core.exceptions import ValidationError
+        from datetime import datetime, timedelta
+        
+        # ✅ Validar plazo mínimo (24 horas antes del turno)
+        if self.original_shift:
+            shift_datetime = datetime.combine(
+                self.original_shift.date, 
+                self.original_shift.start_time
+            )
+            now = datetime.now()
+            hours_until_shift = (shift_datetime - now).total_seconds() / 3600
+            
+            if hours_until_shift < 24:
+                raise ValidationError(
+                    "No se puede solicitar cambio de turno con menos de 24 horas de anticipación"
+                )
+        
+        # ✅ Validar que el empleado propuesto sea diferente al solicitante
+        if self.proposed_employee and self.proposed_employee == self.requesting_employee:
+            raise ValidationError(
+                "No puedes proponer un intercambio contigo mismo"
+            )
+        
+        # ✅ Si hay empleado propuesto, debe haber turno propuesto
+        if self.proposed_employee and not self.proposed_shift:
+            raise ValidationError(
+                "Si propones un compañero, debes especificar su turno"
+            )
+    
+    def is_within_time_limit(self):
+        """Verifica si la solicitud está dentro del plazo de 24h"""
+        from datetime import datetime, timedelta
+        
+        shift_datetime = datetime.combine(
+            self.original_shift.date,
+            self.original_shift.start_time
+        )
+        now = datetime.now()
+        hours_until_shift = (shift_datetime - now).total_seconds() / 3600
+        
+        return hours_until_shift >= 24
+    
+    def __str__(self):
+        return f"Solicitud de {self.requesting_employee} - {self.get_status_display()}"

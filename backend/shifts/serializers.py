@@ -681,3 +681,300 @@ class TimeEntryListSerializer(serializers.Serializer):
     
     def get_time(self, obj):
         return obj.time.isoformat()
+    
+class ShiftChangeRequestSerializer(serializers.Serializer):
+    """Serializer para crear solicitudes de cambio de turno (EMPLEADOS)"""
+    id = serializers.IntegerField(read_only=True)
+    original_shift = serializers.IntegerField()  # Shift ID
+    proposed_employee = serializers.IntegerField(required=False, allow_null=True)  # Employee ID
+    proposed_shift = serializers.IntegerField(required=False, allow_null=True)  # Shift ID
+    reason = serializers.CharField()
+    
+    def validate(self, data):
+        from .models import ShiftChangeRequest, Employee, Shift
+        from datetime import datetime, timedelta
+        
+        request = self.context.get('request')
+        
+        if not request or not request.user.is_authenticated:
+            raise serializers.ValidationError({"detail": "Autenticación requerida"})
+        
+        # ✅ SOLO EMPLEADOS pueden crear solicitudes
+        if request.user.role in ['ADMIN', 'GERENTE']:
+            raise serializers.ValidationError({
+                "detail": "Solo los empleados pueden crear solicitudes de cambio"
+            })
+        
+        try:
+            employee = Employee.objects.get(user=request.user)
+        except Employee.DoesNotExist:
+            raise serializers.ValidationError({
+                "detail": "No se encontró perfil de empleado"
+            })
+        
+        # ✅ Validar turno original
+        try:
+            original_shift = Shift.objects.get(pk=data.get('original_shift'))
+        except Shift.DoesNotExist:
+            raise serializers.ValidationError({
+                "original_shift": "Turno no encontrado"
+            })
+        
+        # ✅ Verificar que el turno pertenezca al empleado
+        if original_shift.employee != employee:
+            raise serializers.ValidationError({
+                "original_shift": "Este turno no te pertenece"
+            })
+        
+        # ✅ Validar plazo de 24 horas
+        shift_datetime = datetime.combine(
+            original_shift.date,
+            original_shift.start_time
+        )
+        now = datetime.now()
+        hours_until_shift = (shift_datetime - now).total_seconds() / 3600
+        
+        if hours_until_shift < 24:
+            raise serializers.ValidationError({
+                "detail": "No se puede solicitar cambio con menos de 24 horas de anticipación"
+            })
+        
+        # ✅ Validar que no exista solicitud pendiente para este turno
+        existing_request = ShiftChangeRequest.objects.filter(
+            original_shift=original_shift,
+            status='pending'
+        ).exists()
+        
+        if existing_request:
+            raise serializers.ValidationError({
+                "detail": "Ya existe una solicitud pendiente para este turno"
+            })
+        
+        # ✅ Si propone compañero, validar
+        proposed_employee = None
+        proposed_shift = None
+        
+        if data.get('proposed_employee'):
+            try:
+                proposed_employee = Employee.objects.get(pk=data.get('proposed_employee'))
+            except Employee.DoesNotExist:
+                raise serializers.ValidationError({
+                    "proposed_employee": "Empleado propuesto no encontrado"
+                })
+            
+            # Verificar que no sea el mismo
+            if proposed_employee == employee:
+                raise serializers.ValidationError({
+                    "proposed_employee": "No puedes proponer un intercambio contigo mismo"
+                })
+            
+            # ✅ Si hay empleado propuesto, debe haber turno propuesto
+            if not data.get('proposed_shift'):
+                raise serializers.ValidationError({
+                    "proposed_shift": "Debes especificar el turno del compañero propuesto"
+                })
+            
+            try:
+                proposed_shift = Shift.objects.get(pk=data.get('proposed_shift'))
+            except Shift.DoesNotExist:
+                raise serializers.ValidationError({
+                    "proposed_shift": "Turno propuesto no encontrado"
+                })
+            
+            # ✅ Verificar que el turno propuesto pertenezca al empleado propuesto
+            if proposed_shift.employee != proposed_employee:
+                raise serializers.ValidationError({
+                    "proposed_shift": "El turno no pertenece al empleado propuesto"
+                })
+            
+            # ✅ Verificar disponibilidad (no solapamiento)
+            # El empleado solicitante debe poder tomar el turno del propuesto
+            conflicts = Shift.objects.filter(
+                employee=employee,
+                date=proposed_shift.date,
+                start_time__lt=proposed_shift.end_time,
+                end_time__gt=proposed_shift.start_time
+            ).exclude(pk=original_shift.pk)
+            
+            if conflicts.exists():
+                raise serializers.ValidationError({
+                    "proposed_shift": "Tienes otro turno que se solapa con el turno propuesto"
+                })
+        
+        # ✅ Validar motivo
+        if not data.get('reason') or len(data.get('reason').strip()) < 10:
+            raise serializers.ValidationError({
+                "reason": "El motivo debe tener al menos 10 caracteres"
+            })
+        
+        data['employee_obj'] = employee
+        data['original_shift_obj'] = original_shift
+        data['proposed_employee_obj'] = proposed_employee
+        data['proposed_shift_obj'] = proposed_shift
+        
+        return data
+    
+    def create(self, validated_data):
+        from .models import ShiftChangeRequest
+        
+        request_obj = ShiftChangeRequest(
+            requesting_employee=validated_data['employee_obj'],
+            original_shift=validated_data['original_shift_obj'],
+            proposed_employee=validated_data.get('proposed_employee_obj'),
+            proposed_shift=validated_data.get('proposed_shift_obj'),
+            reason=validated_data['reason'],
+            status='pending'
+        )
+        request_obj.full_clean()
+        request_obj.save()
+        
+        logger.info(f"✅ Solicitud de cambio creada: ID={request_obj.id}")
+        return request_obj
+
+
+class ShiftChangeRequestListSerializer(serializers.Serializer):
+    """Serializer para listar solicitudes (GERENTES y EMPLEADOS)"""
+    id = serializers.IntegerField()
+    requesting_employee_id = serializers.IntegerField(source='requesting_employee.id')
+    requesting_employee_name = serializers.SerializerMethodField()
+    requesting_employee_position = serializers.SerializerMethodField()
+    
+    original_shift_id = serializers.IntegerField(source='original_shift.id')
+    original_shift_date = serializers.DateField(source='original_shift.date')
+    original_shift_start = serializers.TimeField(source='original_shift.start_time')
+    original_shift_end = serializers.TimeField(source='original_shift.end_time')
+    original_shift_type = serializers.SerializerMethodField()
+    
+    proposed_employee_id = serializers.IntegerField(source='proposed_employee.id', allow_null=True)
+    proposed_employee_name = serializers.SerializerMethodField()
+    
+    proposed_shift_id = serializers.IntegerField(source='proposed_shift.id', allow_null=True)
+    proposed_shift_date = serializers.SerializerMethodField()
+    proposed_shift_start = serializers.SerializerMethodField()
+    proposed_shift_end = serializers.SerializerMethodField()
+    
+    reason = serializers.CharField()
+    status = serializers.CharField()
+    manager_comment = serializers.CharField(allow_null=True)
+    reviewed_by_name = serializers.SerializerMethodField()
+    
+    created_at = serializers.DateTimeField()
+    reviewed_at = serializers.DateTimeField(allow_null=True)
+    
+    def get_requesting_employee_name(self, obj):
+        if obj.requesting_employee and obj.requesting_employee.user:
+            return f"{obj.requesting_employee.user.first_name} {obj.requesting_employee.user.last_name}".strip()
+        return "Desconocido"
+    
+    def get_requesting_employee_position(self, obj):
+        if obj.requesting_employee:
+            return obj.requesting_employee.position or "Sin puesto"
+        return "Sin puesto"
+    
+    def get_original_shift_type(self, obj):
+        if obj.original_shift and obj.original_shift.shift_type:
+            return obj.original_shift.shift_type.name
+        return None
+    
+    def get_proposed_employee_name(self, obj):
+        if obj.proposed_employee and obj.proposed_employee.user:
+            return f"{obj.proposed_employee.user.first_name} {obj.proposed_employee.user.last_name}".strip()
+        return None
+    
+    def get_proposed_shift_date(self, obj):
+        if obj.proposed_shift:
+            return obj.proposed_shift.date.isoformat()
+        return None
+    
+    def get_proposed_shift_start(self, obj):
+        if obj.proposed_shift:
+            return obj.proposed_shift.start_time.isoformat()
+        return None
+    
+    def get_proposed_shift_end(self, obj):
+        if obj.proposed_shift:
+            return obj.proposed_shift.end_time.isoformat()
+        return None
+    
+    def get_reviewed_by_name(self, obj):
+        if obj.reviewed_by:
+            return f"{obj.reviewed_by.first_name} {obj.reviewed_by.last_name}".strip()
+        return None
+
+
+class ShiftChangeRequestReviewSerializer(serializers.Serializer):
+    """Serializer para aprobar/rechazar solicitudes (GERENTES)"""
+    action = serializers.ChoiceField(choices=['approve', 'reject'])
+    manager_comment = serializers.CharField(required=False, allow_blank=True)
+    
+    def validate(self, data):
+        request = self.context.get('request')
+        
+        if not request or not request.user.is_authenticated:
+            raise serializers.ValidationError({"detail": "Autenticación requerida"})
+        
+        # ✅ SOLO GERENTE/ADMIN pueden revisar
+        if request.user.role not in ['ADMIN', 'GERENTE']:
+            raise serializers.ValidationError({
+                "detail": "Solo gerentes pueden revisar solicitudes"
+            })
+        
+        # ✅ Si rechaza, comentario es obligatorio
+        if data.get('action') == 'reject':
+            if not data.get('manager_comment') or len(data.get('manager_comment').strip()) < 10:
+                raise serializers.ValidationError({
+                    "manager_comment": "Debe ingresar un motivo para el rechazo (mínimo 10 caracteres)"
+                })
+        
+        return data
+    
+    def update(self, instance, validated_data):
+        from django.utils import timezone
+        from django.db import transaction
+        
+        action = validated_data.get('action')
+        request = self.context.get('request')
+        
+        with transaction.atomic():
+            if action == 'approve':
+                # ✅ Aprobar: Intercambiar turnos
+                instance.status = 'approved'
+                instance.reviewed_by = request.user
+                instance.reviewed_at = timezone.now()
+                instance.manager_comment = validated_data.get('manager_comment', 'Solicitud aprobada')
+                
+                # ✅ Realizar el intercambio
+                original_shift = instance.original_shift
+                
+                if instance.proposed_employee and instance.proposed_shift:
+                    # Intercambio con compañero
+                    proposed_shift = instance.proposed_shift
+                    
+                    # Guardar empleados temporales
+                    temp_employee = original_shift.employee
+                    
+                    # Intercambiar
+                    original_shift.employee = proposed_shift.employee
+                    proposed_shift.employee = temp_employee
+                    
+                    original_shift.save()
+                    proposed_shift.save()
+                    
+                    logger.info(f"✅ Intercambio realizado: Shifts {original_shift.id} ↔ {proposed_shift.id}")
+                else:
+                    # Solo liberar el turno (sin compañero propuesto)
+                    # El gerente debe reasignar manualmente
+                    logger.info(f"⚠️ Turno {original_shift.id} aprobado para cambio sin propuesta")
+                
+            elif action == 'reject':
+                # ✅ Rechazar: Solo actualizar estado
+                instance.status = 'rejected'
+                instance.reviewed_by = request.user
+                instance.reviewed_at = timezone.now()
+                instance.manager_comment = validated_data.get('manager_comment')
+                
+                logger.info(f"❌ Solicitud rechazada: ID={instance.id}")
+            
+            instance.save()
+        
+        return instance
