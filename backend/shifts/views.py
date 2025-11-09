@@ -14,7 +14,7 @@ from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import status, permissions
 from rest_framework_simplejwt.authentication import JWTAuthentication
-from .serializers import ShiftTypeSerializer, ShiftCreateSerializer, ShiftUpdateSerializer, ShiftSerializer, AvailabilitySerializer, AvailabilityListSerializer
+from .serializers import ShiftTypeSerializer, ShiftCreateSerializer, ShiftUpdateSerializer, ShiftSerializer, AvailabilitySerializer, AvailabilityListSerializer, TimeEntrySerializer, TimeEntryListSerializer
 import logging
 import traceback
 from django.conf import settings
@@ -1159,6 +1159,209 @@ class CheckEmployeeAvailabilityAPIView(APIView):
                     'error': str(exc),
                     'traceback': traceback.format_exc()
                 }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+            return Response({
+                'error': 'Error interno del servidor'
+            }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+            
+@method_decorator(csrf_exempt, name='dispatch')
+class TimeEntryCreateAPIView(APIView):
+    """
+    API para registrar entrada/salida de empleados.
+    POST /api/shifts/time-entry/new/
+    
+    ✅ SOLO EMPLEADOS pueden registrar
+    """
+    authentication_classes = [JWTAuthentication]
+    permission_classes = [permissions.IsAuthenticated]
+    
+    def post(self, request, *args, **kwargs):
+        logger = logging.getLogger(__name__)
+        
+        try:
+            user = request.user
+            logger.info(f"📝 [TimeEntryCreate] Usuario: {user.email}, Tipo: {request.data.get('entry_type')}")
+            
+            serializer = TimeEntrySerializer(data=request.data, context={'request': request})
+            
+            if serializer.is_valid():
+                instance = serializer.save()
+                
+                response_data = {
+                    'id': instance.id,
+                    'employee': instance.employee.id,
+                    'employee_name': f"{instance.employee.user.first_name} {instance.employee.user.last_name}".strip(),
+                    'entry_type': instance.entry_type,
+                    'timestamp': instance.timestamp.isoformat(),
+                    'date': instance.date.isoformat(),
+                    'time': instance.time.isoformat(),
+                    'shift_id': instance.shift.id if instance.shift else None,
+                    'notes': instance.notes or '',
+                    'location': instance.location or ''
+                }
+                
+                logger.info(f"✅ Registro creado: ID={instance.id}, Tipo={instance.entry_type}")
+                return Response(response_data, status=status.HTTP_201_CREATED)
+            
+            logger.warning(f"❌ Validación fallida: {serializer.errors}")
+            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+            
+        except Exception as exc:
+            logger.exception("💥 Error al crear registro de asistencia")
+            if getattr(settings, 'DEBUG', False):
+                return Response({
+                    'detail': str(exc),
+                    'traceback': traceback.format_exc()
+                }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+            return Response({
+                'detail': 'Error al crear registro de asistencia'
+            }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+@method_decorator(csrf_exempt, name='dispatch')
+class TimeEntryListAPIView(APIView):
+    """
+    API para listar registros de entrada/salida.
+    GET /api/shifts/time-entry/
+    
+    - EMPLEADOS: Solo ven sus propios registros
+    - GERENTE/ADMIN: Pueden ver registros de todos
+    
+    Filtros opcionales:
+    - start_date: Fecha inicio (YYYY-MM-DD)
+    - end_date: Fecha fin (YYYY-MM-DD)
+    - employee: ID del empleado (solo para GERENTE/ADMIN)
+    - entry_type: check_in o check_out
+    """
+    authentication_classes = [JWTAuthentication]
+    permission_classes = [permissions.IsAuthenticated]
+    
+    def get(self, request, *args, **kwargs):
+        from .models import TimeEntry
+        logger = logging.getLogger(__name__)
+        
+        try:
+            user = request.user
+            logger.info(f"🔍 [TimeEntryList] Usuario: {user.email}, Rol: {user.role}")
+            
+            # ✅ Si es EMPLEADO, solo ver sus propios registros
+            if user.role == 'EMPLEADO':
+                try:
+                    employee = Employee.objects.get(user=user)
+                    time_entries = TimeEntry.objects.filter(employee=employee)
+                    logger.info(f"👤 Empleado viendo sus registros: {time_entries.count()}")
+                except Employee.DoesNotExist:
+                    return Response({
+                        'results': [],
+                        'message': 'No se encontró perfil de empleado'
+                    }, status=status.HTTP_200_OK)
+            else:
+                # ✅ GERENTE/ADMIN pueden ver todos
+                time_entries = TimeEntry.objects.all()
+                logger.info(f"👔 Gerente/Admin consultando todos los registros: {time_entries.count()}")
+            
+            # ✅ Aplicar filtros
+            start_date = request.query_params.get('start_date')
+            end_date = request.query_params.get('end_date')
+            employee_id = request.query_params.get('employee')
+            entry_type = request.query_params.get('entry_type')
+            
+            if start_date:
+                try:
+                    from datetime import datetime
+                    start_date_obj = datetime.fromisoformat(start_date).date()
+                    time_entries = time_entries.filter(timestamp__date__gte=start_date_obj)
+                except (ValueError, TypeError):
+                    pass
+            
+            if end_date:
+                try:
+                    from datetime import datetime
+                    end_date_obj = datetime.fromisoformat(end_date).date()
+                    time_entries = time_entries.filter(timestamp__date__lte=end_date_obj)
+                except (ValueError, TypeError):
+                    pass
+            
+            if employee_id and user.role in ['ADMIN', 'GERENTE']:
+                time_entries = time_entries.filter(employee_id=employee_id)
+            
+            if entry_type in ['check_in', 'check_out']:
+                time_entries = time_entries.filter(entry_type=entry_type)
+            
+            time_entries = time_entries.select_related('employee__user', 'shift').order_by('-timestamp')
+            
+            # ✅ Serializar resultados
+            serializer = TimeEntryListSerializer(time_entries, many=True)
+            
+            logger.info(f"✅ Retornando {len(serializer.data)} registros")
+            return Response({'results': serializer.data}, status=status.HTTP_200_OK)
+            
+        except Exception as exc:
+            logger.exception("💥 Error al listar registros")
+            if getattr(settings, 'DEBUG', False):
+                return Response({
+                    'results': [],
+                    'error': str(exc),
+                    'traceback': traceback.format_exc()
+                }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+            return Response({
+                'results': [],
+                'error': 'Error interno del servidor'
+            }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+@method_decorator(csrf_exempt, name='dispatch')
+class MyLastTimeEntryAPIView(APIView):
+    """
+    API para obtener el último registro del empleado autenticado.
+    GET /api/shifts/time-entry/last/
+    
+    Útil para saber si el siguiente registro debe ser check_in o check_out
+    """
+    authentication_classes = [JWTAuthentication]
+    permission_classes = [permissions.IsAuthenticated]
+    
+    def get(self, request, *args, **kwargs):
+        from .models import TimeEntry
+        logger = logging.getLogger(__name__)
+        
+        try:
+            user = request.user
+            
+            if user.role in ['ADMIN', 'GERENTE']:
+                return Response({
+                    'detail': 'Este endpoint es solo para empleados'
+                }, status=status.HTTP_403_FORBIDDEN)
+            
+            try:
+                employee = Employee.objects.get(user=user)
+            except Employee.DoesNotExist:
+                return Response({
+                    'last_entry': None,
+                    'next_action': 'check_in'
+                }, status=status.HTTP_200_OK)
+            
+            last_entry = TimeEntry.objects.filter(employee=employee).order_by('-timestamp').first()
+            
+            if last_entry:
+                next_action = 'check_out' if last_entry.entry_type == 'check_in' else 'check_in'
+                
+                return Response({
+                    'last_entry': {
+                        'id': last_entry.id,
+                        'entry_type': last_entry.entry_type,
+                        'timestamp': last_entry.timestamp.isoformat(),
+                        'shift_id': last_entry.shift.id if last_entry.shift else None
+                    },
+                    'next_action': next_action
+                }, status=status.HTTP_200_OK)
+            else:
+                return Response({
+                    'last_entry': None,
+                    'next_action': 'check_in'
+                }, status=status.HTTP_200_OK)
+                
+        except Exception as exc:
+            logger.exception("💥 Error al obtener último registro")
             return Response({
                 'error': 'Error interno del servidor'
             }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)

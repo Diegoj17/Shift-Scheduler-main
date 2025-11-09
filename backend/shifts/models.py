@@ -285,3 +285,39 @@ class Availability(models.Model):
     def __str__(self):
         type_display = "Disponible" if self.type == 'available' else "No Disponible"
         return f"{self.employee} - {self.date} {self.start_time}-{self.end_time} ({type_display})"
+    
+class TimeEntry(models.Model):
+    """
+    Modelo para registrar entradas y salidas reales de los empleados.
+    Diferentes de los Shifts programados.
+    """
+    ENTRY_TYPE_CHOICES = [
+        ('check_in', 'Entrada'),
+        ('check_out', 'Salida'),
+    ]
+    
+    employee = models.ForeignKey(Employee, on_delete=models.CASCADE, related_name='time_entries')
+    shift = models.ForeignKey(Shift, on_delete=models.SET_NULL, null=True, blank=True, related_name='time_entries')
+    entry_type = models.CharField(max_length=20, choices=ENTRY_TYPE_CHOICES)
+    timestamp = models.DateTimeField(auto_now_add=True)
+    notes = models.TextField(blank=True, null=True)
+    location = models.CharField(max_length=200, blank=True, null=True)  # Opcional: ubicación GPS
+    
+    class Meta:
+        db_table = 'shifts_timeentry'
+        verbose_name = "Registro de Asistencia"
+        verbose_name_plural = "Registros de Asistencia"
+        ordering = ['-timestamp']
+    
+    def __str__(self):
+        return f"{self.employee} - {self.get_entry_type_display()} - {self.timestamp.strftime('%Y-%m-%d %H:%M:%S')}"
+    
+    @property
+    def date(self):
+        """Fecha del registro"""
+        return self.timestamp.date()
+    
+    @property
+    def time(self):
+        """Hora del registro"""
+        return self.timestamp.time()
