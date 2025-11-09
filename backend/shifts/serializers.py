@@ -2,7 +2,7 @@
 
 from rest_framework import serializers
 from django.utils import timezone
-from .models import Shift, ShiftType, Employee
+from .models import Shift, ShiftType, Employee, Availability, TimeEntry
 from django.contrib.auth import get_user_model
 import logging
 from datetime import time, timedelta
@@ -511,3 +511,130 @@ class AvailabilityListSerializer(serializers.Serializer):
     
     def get_duration_hours(self, obj):
         return obj.duration_hours()
+    
+class TimeEntrySerializer(serializers.Serializer):
+    """Serializer para registrar entrada/salida de empleados"""
+    id = serializers.IntegerField(read_only=True)
+    entry_type = serializers.ChoiceField(choices=['check_in', 'check_out'])
+    notes = serializers.CharField(allow_blank=True, required=False)
+    location = serializers.CharField(allow_blank=True, required=False)
+    shift_id = serializers.IntegerField(required=False, allow_null=True)
+    
+    def validate(self, data):
+        from .models import Employee, Shift, TimeEntry
+        from django.utils import timezone
+        from datetime import timedelta
+        
+        request = self.context.get('request')
+        
+        if not request or not request.user.is_authenticated:
+            raise serializers.ValidationError({"detail": "Autenticación requerida"})
+        
+        # ✅ SOLO EMPLEADOS pueden registrar entrada/salida
+        if request.user.role in ['ADMIN', 'GERENTE']:
+            raise serializers.ValidationError({
+                "detail": "Solo los empleados pueden registrar entrada/salida"
+            })
+        
+        try:
+            employee = Employee.objects.get(user=request.user)
+            logger.info(f"✅ Employee encontrado: ID={employee.id}, User={request.user.email}")
+        except Employee.DoesNotExist:
+            raise serializers.ValidationError({
+                "detail": "No se encontró perfil de empleado para este usuario"
+            })
+        
+        entry_type = data.get('entry_type')
+        
+        # ✅ Obtener el último registro del empleado
+        last_entry = TimeEntry.objects.filter(employee=employee).order_by('-timestamp').first()
+        
+        # ✅ Validar secuencia lógica: check_in -> check_out -> check_in...
+        if last_entry:
+            if last_entry.entry_type == entry_type:
+                if entry_type == 'check_in':
+                    raise serializers.ValidationError({
+                        "detail": "Ya tienes una entrada registrada. Debes registrar una salida primero."
+                    })
+                else:
+                    raise serializers.ValidationError({
+                        "detail": "Ya tienes una salida registrada. Debes registrar una entrada primero."
+                    })
+        else:
+            # Primer registro debe ser check_in
+            if entry_type == 'check_out':
+                raise serializers.ValidationError({
+                    "detail": "Debes registrar una entrada antes de registrar una salida."
+                })
+        
+        # ✅ Buscar turno activo (opcional)
+        shift = None
+        shift_id = data.get('shift_id')
+        
+        if shift_id:
+            try:
+                shift = Shift.objects.get(pk=shift_id, employee=employee)
+            except Shift.DoesNotExist:
+                raise serializers.ValidationError({
+                    "shift_id": "Turno no encontrado o no pertenece a este empleado"
+                })
+        else:
+            # Buscar turno del día actual
+            today = timezone.now().date()
+            current_time = timezone.now().time()
+            
+            # Buscar turno que coincida con la hora actual
+            potential_shifts = Shift.objects.filter(
+                employee=employee,
+                date=today,
+                start_time__lte=current_time,
+                end_time__gte=current_time
+            )
+            
+            if potential_shifts.exists():
+                shift = potential_shifts.first()
+                logger.info(f"✅ Turno encontrado automáticamente: {shift.id}")
+        
+        data['employee_obj'] = employee
+        data['shift_obj'] = shift
+        return data
+    
+    def create(self, validated_data):
+        from .models import TimeEntry
+        
+        time_entry = TimeEntry(
+            employee=validated_data['employee_obj'],
+            shift=validated_data.get('shift_obj'),
+            entry_type=validated_data['entry_type'],
+            notes=validated_data.get('notes', ''),
+            location=validated_data.get('location', '')
+        )
+        time_entry.save()
+        
+        logger.info(f"✅ Registro creado: {time_entry.entry_type} - {time_entry.timestamp}")
+        return time_entry
+
+
+class TimeEntryListSerializer(serializers.Serializer):
+    """Serializer para listar registros de entrada/salida"""
+    id = serializers.IntegerField()
+    employee_id = serializers.IntegerField(source='employee.id')
+    employee_name = serializers.SerializerMethodField()
+    entry_type = serializers.CharField()
+    timestamp = serializers.DateTimeField()
+    date = serializers.SerializerMethodField()
+    time = serializers.SerializerMethodField()
+    shift_id = serializers.IntegerField(source='shift.id', allow_null=True)
+    notes = serializers.CharField()
+    location = serializers.CharField()
+    
+    def get_employee_name(self, obj):
+        if obj.employee and obj.employee.user:
+            return f"{obj.employee.user.first_name} {obj.employee.user.last_name}".strip()
+        return "Desconocido"
+    
+    def get_date(self, obj):
+        return obj.date.isoformat()
+    
+    def get_time(self, obj):
+        return obj.time.isoformat()

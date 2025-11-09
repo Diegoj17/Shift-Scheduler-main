@@ -1,5 +1,5 @@
 from django.contrib import admin
-from .models import Shift, ShiftType, Employee, Availability
+from .models import Shift, ShiftType, Employee, Availability, TimeEntry
 
 @admin.register(ShiftType)
 class ShiftTypeAdmin(admin.ModelAdmin):
@@ -32,4 +32,14 @@ class AvailabilityAdmin(admin.ModelAdmin):
     def get_queryset(self, request):
         return super().get_queryset(request).select_related('employee__user')
 
+@admin.register(TimeEntry)
+class TimeEntryAdmin(admin.ModelAdmin):
+    list_display = ['employee', 'entry_type', 'timestamp', 'shift', 'location']
+    list_filter = ['entry_type', 'timestamp', 'employee']
+    search_fields = ['employee__user__first_name', 'employee__user__last_name', 'notes']
+    ordering = ['-timestamp']
+    readonly_fields = ['timestamp']
+    
+    def get_queryset(self, request):
+        return super().get_queryset(request).select_related('employee__user', 'shift')
 
