@@ -523,7 +523,9 @@ class TimeEntrySerializer(serializers.Serializer):
     def validate(self, data):
         from .models import Employee, Shift, TimeEntry
         from django.utils import timezone
-        from datetime import timedelta
+        from datetime import timedelta, time as datetime_time
+        import pytz
+        from django.conf import settings
         
         request = self.context.get('request')
         
@@ -546,10 +548,52 @@ class TimeEntrySerializer(serializers.Serializer):
         
         entry_type = data.get('entry_type')
         
-        # ✅ Obtener el último registro del empleado
+        # ✅ NUEVO: Verificar registros de HOY (en zona horaria local)
+        local_tz = pytz.timezone(settings.TIME_ZONE)
+        now_local = timezone.now().astimezone(local_tz)
+        today_local = now_local.date()
+        
+        # Calcular inicio y fin del día en hora local
+        start_of_day_local = timezone.make_aware(
+            timezone.datetime.combine(today_local, datetime_time.min),
+            local_tz
+        )
+        end_of_day_local = timezone.make_aware(
+            timezone.datetime.combine(today_local, datetime_time.max),
+            local_tz
+        )
+        
+        # Buscar registros de hoy
+        today_entries = TimeEntry.objects.filter(
+            employee=employee,
+            timestamp__gte=start_of_day_local,
+            timestamp__lte=end_of_day_local
+        ).order_by('timestamp')
+        
+        check_in_today = today_entries.filter(entry_type='check_in').first()
+        check_out_today = today_entries.filter(entry_type='check_out').first()
+        
+        logger.info(f"📅 Registros de HOY ({today_local}): check_in={bool(check_in_today)}, check_out={bool(check_out_today)}")
+        
+        # ✅ Validar que no haya registros duplicados del día
+        if entry_type == 'check_in':
+            if check_in_today:
+                raise serializers.ValidationError({
+                    "detail": f"Ya tienes una entrada registrada hoy a las {check_in_today.timestamp_local.strftime('%H:%M:%S')}"
+                })
+        elif entry_type == 'check_out':
+            if check_out_today:
+                raise serializers.ValidationError({
+                    "detail": f"Ya tienes una salida registrada hoy a las {check_out_today.timestamp_local.strftime('%H:%M:%S')}"
+                })
+            if not check_in_today:
+                raise serializers.ValidationError({
+                    "detail": "Debes registrar una entrada antes de registrar una salida"
+                })
+        
+        # ✅ Validar secuencia lógica con el último registro general
         last_entry = TimeEntry.objects.filter(employee=employee).order_by('-timestamp').first()
         
-        # ✅ Validar secuencia lógica: check_in -> check_out -> check_in...
         if last_entry:
             if last_entry.entry_type == entry_type:
                 if entry_type == 'check_in':
@@ -580,13 +624,12 @@ class TimeEntrySerializer(serializers.Serializer):
                 })
         else:
             # Buscar turno del día actual
-            today = timezone.now().date()
-            current_time = timezone.now().time()
+            current_time = now_local.time()
             
             # Buscar turno que coincida con la hora actual
             potential_shifts = Shift.objects.filter(
                 employee=employee,
-                date=today,
+                date=today_local,
                 start_time__lte=current_time,
                 end_time__gte=current_time
             )
@@ -611,7 +654,7 @@ class TimeEntrySerializer(serializers.Serializer):
         )
         time_entry.save()
         
-        logger.info(f"✅ Registro creado: {time_entry.entry_type} - {time_entry.timestamp}")
+        logger.info(f"✅ Registro creado: {time_entry.entry_type} - {time_entry.timestamp_local}")
         return time_entry
 
 
