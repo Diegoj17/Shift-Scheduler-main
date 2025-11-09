@@ -286,10 +286,11 @@ class Availability(models.Model):
         type_display = "Disponible" if self.type == 'available' else "No Disponible"
         return f"{self.employee} - {self.date} {self.start_time}-{self.end_time} ({type_display})"
     
+# shifts/models.py - VERIFICAR que TimeEntry tenga esto:
+
 class TimeEntry(models.Model):
     """
     Modelo para registrar entradas y salidas reales de los empleados.
-    Diferentes de los Shifts programados.
     """
     ENTRY_TYPE_CHOICES = [
         ('check_in', 'Entrada'),
@@ -299,9 +300,9 @@ class TimeEntry(models.Model):
     employee = models.ForeignKey(Employee, on_delete=models.CASCADE, related_name='time_entries')
     shift = models.ForeignKey(Shift, on_delete=models.SET_NULL, null=True, blank=True, related_name='time_entries')
     entry_type = models.CharField(max_length=20, choices=ENTRY_TYPE_CHOICES)
-    timestamp = models.DateTimeField(auto_now_add=True)
+    timestamp = models.DateTimeField(auto_now_add=True)  # Se guarda en UTC
     notes = models.TextField(blank=True, null=True)
-    location = models.CharField(max_length=200, blank=True, null=True)  # Opcional: ubicación GPS
+    location = models.CharField(max_length=200, blank=True, null=True)
     
     class Meta:
         db_table = 'shifts_timeentry'
@@ -310,14 +311,29 @@ class TimeEntry(models.Model):
         ordering = ['-timestamp']
     
     def __str__(self):
-        return f"{self.employee} - {self.get_entry_type_display()} - {self.timestamp.strftime('%Y-%m-%d %H:%M:%S')}"
+        return f"{self.employee} - {self.get_entry_type_display()} - {self.timestamp_local.strftime('%Y-%m-%d %H:%M:%S')}"
+    
+    @property
+    def timestamp_local(self):
+        """
+        Convierte el timestamp UTC a hora local de Colombia
+        """
+        from django.conf import settings
+        from django.utils import timezone
+        import pytz
+        
+        if timezone.is_aware(self.timestamp):
+            # Convertir de UTC a zona horaria local
+            local_tz = pytz.timezone(settings.TIME_ZONE)
+            return self.timestamp.astimezone(local_tz)
+        return self.timestamp
     
     @property
     def date(self):
-        """Fecha del registro"""
-        return self.timestamp.date()
+        """Fecha del registro en zona horaria local"""
+        return self.timestamp_local.date()
     
     @property
     def time(self):
-        """Hora del registro"""
-        return self.timestamp.time()
+        """Hora del registro en zona horaria local"""
+        return self.timestamp_local.time()
