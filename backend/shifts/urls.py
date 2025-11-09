@@ -33,4 +33,7 @@ urlpatterns = [
     path('change-requests/new/', views.ShiftChangeRequestCreateAPIView.as_view(), name='shift-change-request-create'),
     path('change-requests/', views.ShiftChangeRequestListAPIView.as_view(), name='shift-change-request-list'),
     path('change-requests/<int:pk>/review/', views.ShiftChangeRequestReviewAPIView.as_view(), name='shift-change-request-review'),
+    
+    path('employees/', views.EmployeeListAPIView.as_view(), name='employee-list'),
+    path('employees/<int:employee_id>/shifts/', views.EmployeeShiftsAPIView.as_view(), name='employee-shifts'),
 ]

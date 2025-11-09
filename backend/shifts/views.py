@@ -1555,3 +1555,124 @@ class ShiftChangeRequestReviewAPIView(APIView):
             return Response({
                 'detail': 'Error al revisar solicitud'
             }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+            
+@method_decorator(csrf_exempt, name='dispatch')
+class EmployeeShiftsAPIView(APIView):
+    """
+    API para obtener turnos de un empleado específico (para intercambios).
+    GET /api/shifts/employees/<employee_id>/shifts/
+    
+    Retorna solo turnos futuros (>24h) que sean válidos para intercambio.
+    """
+    authentication_classes = [JWTAuthentication]
+    permission_classes = [permissions.IsAuthenticated]
+    
+    def get(self, request, employee_id, *args, **kwargs):
+        logger = logging.getLogger(__name__)
+        
+        try:
+            user = request.user
+            logger.info(f"🔍 [EmployeeShifts] Usuario: {user.email} consultando turnos de empleado {employee_id}")
+            
+            # Verificar que el empleado exista
+            try:
+                target_employee = Employee.objects.get(pk=employee_id)
+            except Employee.DoesNotExist:
+                return Response({
+                    'results': [],
+                    'error': 'Empleado no encontrado'
+                }, status=status.HTTP_404_NOT_FOUND)
+            
+            # Obtener fecha actual y fecha límite (próximos 60 días)
+            from datetime import datetime, timedelta
+            today = datetime.now().date()
+            limit_date = today + timedelta(days=60)
+            
+            # Obtener turnos del empleado
+            shifts = Shift.objects.filter(
+                employee=target_employee,
+                date__gte=today,
+                date__lte=limit_date
+            ).select_related('shift_type').order_by('date', 'start_time')
+            
+            # Filtrar solo turnos con >24h de anticipación
+            valid_shifts = []
+            for shift in shifts:
+                shift_datetime = datetime.combine(shift.date, shift.start_time)
+                hours_until = (shift_datetime - datetime.now()).total_seconds() / 3600
+                
+                if hours_until >= 24:
+                    valid_shifts.append(shift)
+            
+            logger.info(f"✅ Turnos válidos encontrados: {len(valid_shifts)}")
+            
+            # Serializar resultados
+            results = []
+            for shift in valid_shifts:
+                shift_data = {
+                    'id': shift.id,
+                    'date': shift.date.isoformat(),
+                    'start_time': shift.start_time.isoformat(),
+                    'end_time': shift.end_time.isoformat(),
+                    'shift_type_id': shift.shift_type.id if shift.shift_type else None,
+                    'shift_type_name': shift.shift_type.name if shift.shift_type else 'Sin tipo',
+                    'shift_type_color': shift.shift_type.color if shift.shift_type else '#3788d8',
+                    'employee_id': shift.employee.id,
+                    'employee_name': f"{shift.employee.user.first_name} {shift.employee.user.last_name}".strip()
+                }
+                results.append(shift_data)
+            
+            return Response({'results': results}, status=status.HTTP_200_OK)
+            
+        except Exception as exc:
+            logger.exception("💥 Error obteniendo turnos del empleado")
+            if getattr(settings, 'DEBUG', False):
+                return Response({
+                    'results': [],
+                    'error': str(exc),
+                    'traceback': traceback.format_exc()
+                }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+            return Response({
+                'results': [],
+                'error': 'Error interno del servidor'
+            }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+            
+@method_decorator(csrf_exempt, name='dispatch')
+class EmployeeListAPIView(APIView):
+    """
+    API para listar empleados activos.
+    GET /api/shifts/employees/
+    """
+    authentication_classes = [JWTAuthentication]
+    permission_classes = [permissions.IsAuthenticated]
+    
+    def get(self, request, *args, **kwargs):
+        logger = logging.getLogger(__name__)
+        
+        try:
+            # Obtener solo empleados activos
+            employees = Employee.objects.filter(is_active=True).select_related('user')
+            
+            results = []
+            for emp in employees:
+                # No incluir al usuario actual en la lista
+                if emp.user == request.user:
+                    continue
+                
+                emp_data = {
+                    'id': emp.id,
+                    'name': f"{emp.user.first_name} {emp.user.last_name}".strip() or emp.user.email,
+                    'position': emp.position or getattr(emp.user, 'puesto', None) or 'Sin puesto',
+                    'user_id': emp.user.id
+                }
+                results.append(emp_data)
+            
+            logger.info(f"✅ Retornando {len(results)} empleados")
+            return Response({'results': results}, status=status.HTTP_200_OK)
+            
+        except Exception as exc:
+            logger.exception("💥 Error listando empleados")
+            return Response({
+                'results': [],
+                'error': 'Error interno del servidor'
+            }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
