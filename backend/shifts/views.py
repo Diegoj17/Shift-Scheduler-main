@@ -714,8 +714,13 @@ class MyShiftsAPIView(APIView):
                     time_diff = shift_datetime_local - now_local
                     hours_until_shift = time_diff.total_seconds() / 3600
                     
-                    # Solo incluir turnos con más de 24 horas de anticipación
-                    if hours_until_shift >= 24:
+                    # Solo incluir turnos con más de `min_hours` horas de anticipación
+                    try:
+                        min_hours_self = float(request.query_params.get('min_hours', 24))
+                    except (TypeError, ValueError):
+                        min_hours_self = 24.0
+
+                    if hours_until_shift >= min_hours_self:
                         # Obtener información del empleado
                         employee_position = s.employee.position if s.employee else None
                         user_obj = s.employee.user if s.employee else None
@@ -1800,15 +1805,22 @@ class EmployeeShiftsAPIView(APIView):
                 date__lte=limit_date
             ).select_related('shift_type').order_by('date', 'start_time')
             
-            # ✅ Filtrar solo turnos con >24h de anticipación usando zona horaria local
+            # ✅ Filtrar turnos por anticipación (por defecto 24 horas). Se puede sobrescribir
+            # pasando ?min_hours=<n> en la petición. Esto ayuda a pruebas o a permitir mostrar
+            # también turnos más cercanos cuando se prefiera.
+            try:
+                min_hours = float(request.query_params.get('min_hours', 24))
+            except (TypeError, ValueError):
+                min_hours = 24.0
+
             valid_shifts = []
             for shift in shifts:
                 shift_datetime_naive = datetime.combine(shift.date, shift.start_time)
                 shift_datetime_local = local_tz.localize(shift_datetime_naive)
-                
+
                 hours_until = (shift_datetime_local - now_local).total_seconds() / 3600
-                
-                if hours_until >= 24:
+
+                if hours_until >= min_hours:
                     valid_shifts.append(shift)
             
             logger.info(f"✅ Turnos válidos encontrados: {len(valid_shifts)}")
