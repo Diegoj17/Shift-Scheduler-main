@@ -23,4 +23,9 @@ urlpatterns = [
     path('availability/<int:pk>/edit/', views.AvailabilityUpdateAPIView.as_view(), name='availability_edit'),
     path('availability/<int:pk>/delete/', views.AvailabilityDeleteAPIView.as_view(), name='availability_delete'),
     path('availability/check/', views.CheckEmployeeAvailabilityAPIView.as_view(), name='availability_check'),
+    
+    # Registros de Turno
+    path('time-entry/', views.TimeEntryListAPIView.as_view(), name='timeentry_list'),
+    path('time-entry/new/', views.TimeEntryCreateAPIView.as_view(), name='timeentry_create'),
+    path('time-entry/last/', views.MyLastTimeEntryAPIView.as_view(), name='timeentry_last'),
 ]
