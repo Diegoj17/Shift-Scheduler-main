@@ -952,6 +952,56 @@ class AvailabilityListAPIView(APIView):
                 'error': 'Error interno del servidor'
             }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
+@method_decorator(csrf_exempt, name='dispatch')
+class EmployeeListAPIView(APIView):
+    """
+    API para listar empleados.
+    - ADMIN/GERENTE: ven todos los empleados
+    - EMPLEADO: ve solo su propio perfil
+    """
+    authentication_classes = [JWTAuthentication]
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get(self, request, *args, **kwargs):
+        from .models import Employee
+        logger = logging.getLogger(__name__)
+
+        try:
+            user = request.user
+            logger.info(f"🔍 [EmployeeList] Usuario: {user.email}, Rol: {user.role}")
+
+            if user.role == 'EMPLEADO':
+                try:
+                    emp = Employee.objects.select_related('user').get(user=user)
+                    employees_qs = Employee.objects.filter(pk=emp.pk)
+                    logger.info(f"👤 Empleado solicitando su propio perfil: ID={emp.id}")
+                except Employee.DoesNotExist:
+                    return Response({'results': [], 'message': 'No se encontró perfil de empleado'}, status=status.HTTP_200_OK)
+            else:
+                employees_qs = Employee.objects.select_related('user').all()
+                logger.info(f"👔 Gerente/Admin consultando empleados: total={employees_qs.count()}")
+
+            results = []
+            for e in employees_qs:
+                u = getattr(e, 'user', None)
+                results.append({
+                    'id': e.id,
+                    'user_id': u.id if u else None,
+                    'first_name': getattr(u, 'first_name', '') if u else '',
+                    'last_name': getattr(u, 'last_name', '') if u else '',
+                    'email': getattr(u, 'email', None) if u else None,
+                    'position': e.position,
+                    'is_active': e.is_active,
+                })
+
+            return Response({'results': results}, status=status.HTTP_200_OK)
+
+        except Exception as exc:
+            logger.exception("💥 Error listando empleados")
+            if getattr(settings, 'DEBUG', False):
+                return Response({'results': [], 'error': str(exc), 'traceback': traceback.format_exc()}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+            return Response({'results': [], 'error': 'Error interno del servidor'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
 
 @method_decorator(csrf_exempt, name='dispatch')
 class AvailabilityUpdateAPIView(APIView):
