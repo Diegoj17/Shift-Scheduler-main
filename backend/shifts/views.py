@@ -365,8 +365,12 @@ class ShiftListAPIView(APIView):
 
     def get(self, request, *args, **kwargs):
         try:
+            import pytz
             logger = logging.getLogger(__name__)
             logger.info("🔍 [ShiftListAPIView] Iniciando...")
+            
+            # ✅ Obtener zona horaria local
+            local_tz = pytz.timezone(settings.TIME_ZONE)
             
             # Obtener turnos con relaciones precargadas
             shifts = Shift.objects.select_related(
@@ -416,15 +420,25 @@ class ShiftListAPIView(APIView):
                         shift_type_name = shift.shift_type.name
                         shift_type_id = shift.shift_type.id
                     
-                    # Formatear fechas
-                    start_datetime = datetime.combine(shift.date, shift.start_time)
-                    end_datetime = datetime.combine(shift.date, shift.end_time)
+                    # ✅ CRÍTICO: Formatear fechas sin zona horaria (formato local)
+                    # La fecha ya es un objeto date (sin hora), usar directamente
+                    shift_date_str = shift.date.isoformat()
+                    
+                    # Para las horas, usar formato HH:MM:SS sin zona horaria
+                    start_time_str = shift.start_time.isoformat() if shift.start_time else '00:00:00'
+                    end_time_str = shift.end_time.isoformat() if shift.end_time else '00:00:00'
+                    
+                    # ✅ Crear timestamps combinando fecha + hora (sin TZ)
+                    start_datetime_str = f"{shift_date_str}T{start_time_str}"
+                    end_datetime_str = f"{shift_date_str}T{end_time_str}"
+                    
+                    logger.debug(f"📅 Shift {shift.id}: date={shift_date_str}, start={start_time_str}, end={end_time_str}")
                     
                     shift_info = {
                         'id': shift.id,
                         'title': f"{employee_name} - {role}",
-                        'start': start_datetime.isoformat(),
-                        'end': end_datetime.isoformat(),
+                        'start': start_datetime_str,
+                        'end': end_datetime_str,
                         'color': color,
                         
                         # ✅ CRÍTICO: Información del empleado
@@ -433,6 +447,7 @@ class ShiftListAPIView(APIView):
                         'employee_user_id': user_id,          # ✅ USER_ID (para enviar al backend)
                         'employeeId': employee_id,            # Compatibilidad
                         'employeeUserId': user_id,            # ✅ Para frontend
+                        'employeeName': employee_name,        # ✅ Para modal
                         'role': role,
                         
                         # ✅ Información del tipo de turno
@@ -441,12 +456,12 @@ class ShiftListAPIView(APIView):
                         'shiftTypeId': shift_type_id,         # Compatibilidad
                         'shiftTypeName': shift_type_name,     # Compatibilidad
                         
-                        # ✅ Campos adicionales para edición
-                        'date': shift.date.isoformat(),
-                        'start_time': shift.start_time.isoformat(),
-                        'end_time': shift.end_time.isoformat(),
-                        'startTime': shift.start_time.isoformat(),  # Compatibilidad
-                        'endTime': shift.end_time.isoformat(),      # Compatibilidad
+                        # ✅ Campos adicionales para edición (FORMATO LOCAL sin TZ)
+                        'date': shift_date_str,
+                        'start_time': start_time_str,
+                        'end_time': end_time_str,
+                        'startTime': start_time_str,  # Compatibilidad
+                        'endTime': end_time_str,      # Compatibilidad
                         'notes': shift.notes or '',
                     }
                     
@@ -461,6 +476,7 @@ class ShiftListAPIView(APIView):
             return Response(shifts_data, status=status.HTTP_200_OK)
             
         except Exception as exc:
+            logger = logging.getLogger(__name__)
             logger.exception("💥 [ShiftListAPIView] Error global")
             if getattr(settings, 'DEBUG', False):
                 return Response({
@@ -811,6 +827,7 @@ class AvailabilityListAPIView(APIView):
     
     def get(self, request, *args, **kwargs):
         from .models import Availability
+        import pytz
         logger = logging.getLogger(__name__)
         
         try:
@@ -842,6 +859,7 @@ class AvailabilityListAPIView(APIView):
                 
                 if start_date:
                     try:
+                        from datetime import datetime
                         start_date_obj = datetime.fromisoformat(start_date).date()
                         availabilities = availabilities.filter(date__gte=start_date_obj)
                         logger.info(f"📅 Filtrado desde: {start_date_obj}")
@@ -850,6 +868,7 @@ class AvailabilityListAPIView(APIView):
                 
                 if end_date:
                     try:
+                        from datetime import datetime
                         end_date_obj = datetime.fromisoformat(end_date).date()
                         availabilities = availabilities.filter(date__lte=end_date_obj)
                         logger.info(f"📅 Filtrado hasta: {end_date_obj}")
@@ -866,11 +885,33 @@ class AvailabilityListAPIView(APIView):
             
             availabilities = availabilities.select_related('employee__user').order_by('date', 'start_time')
             
-            # ✅ Serializar resultados
-            serializer = AvailabilityListSerializer(availabilities, many=True)
+            # ✅ Construir respuesta manualmente (sin timezone)
+            results = []
+            for avail in availabilities:
+                try:
+                    # ✅ Formatear sin zona horaria
+                    result_data = {
+                        'id': avail.id,
+                        'employee_id': avail.employee.id,
+                        'employee_name': f"{avail.employee.user.first_name} {avail.employee.user.last_name}".strip() if avail.employee.user else "Desconocido",
+                        'employee_position': avail.employee.position or getattr(avail.employee.user, 'puesto', None) or 'Sin puesto',
+                        'employee_area': getattr(avail.employee.user, 'departamento', None) or 'Sin área',
+                        'date': avail.date.isoformat(),  # ✅ Formato local YYYY-MM-DD
+                        'start_time': avail.start_time.isoformat(),  # ✅ HH:MM:SS
+                        'end_time': avail.end_time.isoformat(),  # ✅ HH:MM:SS
+                        'type': avail.type,
+                        'color': avail.get_color(),
+                        'notes': avail.notes or '',
+                        'duration_hours': avail.duration_hours(),
+                        'created_at': avail.created_at.isoformat()
+                    }
+                    results.append(result_data)
+                except Exception as e:
+                    logger.exception(f"💥 Error procesando disponibilidad {avail.id}: {e}")
+                    continue
             
-            logger.info(f"✅ Retornando {len(serializer.data)} disponibilidades")
-            return Response({'results': serializer.data}, status=status.HTTP_200_OK)
+            logger.info(f"✅ Retornando {len(results)} disponibilidades")
+            return Response({'results': results}, status=status.HTTP_200_OK)
             
         except Exception as exc:
             logger.exception("💥 Error al listar disponibilidades")
