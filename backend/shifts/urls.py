@@ -28,4 +28,9 @@ urlpatterns = [
     path('time-entry/', views.TimeEntryListAPIView.as_view(), name='timeentry_list'),
     path('time-entry/new/', views.TimeEntryCreateAPIView.as_view(), name='timeentry_create'),
     path('time-entry/last/', views.MyLastTimeEntryAPIView.as_view(), name='timeentry_last'),
+    
+    # Solicitudes de Cambio de Turno
+    path('change-requests/new/', views.ShiftChangeRequestCreateAPIView.as_view(), name='shift-change-request-create'),
+    path('change-requests/', views.ShiftChangeRequestListAPIView.as_view(), name='shift-change-request-list'),
+    path('change-requests/<int:pk>/review/', views.ShiftChangeRequestReviewAPIView.as_view(), name='shift-change-request-review'),
 ]
