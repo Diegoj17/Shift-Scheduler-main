@@ -931,6 +931,7 @@ class ShiftChangeRequestReviewSerializer(serializers.Serializer):
     def update(self, instance, validated_data):
         from django.utils import timezone
         from django.db import transaction
+        from datetime import datetime, timedelta
         
         action = validated_data.get('action')
         request = self.context.get('request')
@@ -943,17 +944,21 @@ class ShiftChangeRequestReviewSerializer(serializers.Serializer):
                 instance.reviewed_at = timezone.now()
                 instance.manager_comment = validated_data.get('manager_comment', 'Solicitud aprobada')
                 
-                # ✅ CORRECCIÓN: Realizar el intercambio evitando violación de restricción única
                 original_shift = instance.original_shift
                 
                 if instance.proposed_employee and instance.proposed_shift:
                     proposed_shift = instance.proposed_shift
                     
-                    # ✅ SOLUCIÓN: Guardar datos temporales
+                    logger.info(f"🔄 Iniciando intercambio:")
+                    logger.info(f"   Turno Original: Employee={original_shift.employee.id}, Date={original_shift.date}, Time={original_shift.start_time}")
+                    logger.info(f"   Turno Propuesto: Employee={proposed_shift.employee.id}, Date={proposed_shift.date}, Time={proposed_shift.start_time}")
+                    
+                    # ✅ NUEVA ESTRATEGIA: Usar fecha temporal para evitar conflictos
+                    
+                    # 1. Guardar datos
                     original_employee = original_shift.employee
                     proposed_employee = proposed_shift.employee
                     
-                    # ✅ Datos del turno original
                     original_data = {
                         'date': original_shift.date,
                         'start_time': original_shift.start_time,
@@ -962,7 +967,6 @@ class ShiftChangeRequestReviewSerializer(serializers.Serializer):
                         'notes': original_shift.notes
                     }
                     
-                    # ✅ Datos del turno propuesto
                     proposed_data = {
                         'date': proposed_shift.date,
                         'start_time': proposed_shift.start_time,
@@ -971,43 +975,47 @@ class ShiftChangeRequestReviewSerializer(serializers.Serializer):
                         'notes': proposed_shift.notes
                     }
                     
-                    # ✅ PASO 1: Eliminar ambos turnos para evitar restricción única
-                    original_shift_id = original_shift.id
-                    proposed_shift_id = proposed_shift.id
+                    # 2. Mover turnos a fechas temporales (año 9999) para liberar la restricción
+                    temp_date = datetime(9999, 12, 31).date()
                     
-                    original_shift.delete()
-                    proposed_shift.delete()
+                    logger.info(f"📦 Moviendo turnos a fecha temporal: {temp_date}")
                     
-                    logger.info(f"🗑️ Turnos eliminados: {original_shift_id}, {proposed_shift_id}")
+                    original_shift.date = temp_date
+                    original_shift.save(update_fields=['date'])
                     
-                    # ✅ PASO 2: Recrear turnos con empleados intercambiados
-                    # El empleado que tenía el turno original ahora tiene el turno propuesto
-                    new_shift_1 = Shift.objects.create(
-                        employee=original_employee,  # Empleado original
-                        date=proposed_data['date'],
-                        start_time=proposed_data['start_time'],
-                        end_time=proposed_data['end_time'],
-                        shift_type=proposed_data['shift_type'],
-                        notes=f"Intercambiado - {proposed_data['notes']}" if proposed_data['notes'] else "Turno intercambiado"
-                    )
+                    proposed_shift.date = temp_date
+                    proposed_shift.save(update_fields=['date'])
                     
-                    # El empleado que tenía el turno propuesto ahora tiene el turno original
-                    new_shift_2 = Shift.objects.create(
-                        employee=proposed_employee,  # Empleado propuesto
-                        date=original_data['date'],
-                        start_time=original_data['start_time'],
-                        end_time=original_data['end_time'],
-                        shift_type=original_data['shift_type'],
-                        notes=f"Intercambiado - {original_data['notes']}" if original_data['notes'] else "Turno intercambiado"
-                    )
+                    logger.info(f"✅ Turnos movidos a fecha temporal")
                     
-                    logger.info(f"✅ Intercambio realizado: Nuevos turnos {new_shift_1.id}, {new_shift_2.id}")
-                    logger.info(f"   - Empleado {original_employee.id} ({original_employee.user.email}): {original_data['date']} → {proposed_data['date']}")
-                    logger.info(f"   - Empleado {proposed_employee.id} ({proposed_employee.user.email}): {proposed_data['date']} → {original_data['date']}")
+                    # 3. Actualizar con datos intercambiados
+                    logger.info(f"🔄 Intercambiando datos...")
+                    
+                    # Original shift ahora tiene datos del propuesto pero con empleado original
+                    original_shift.employee = original_employee
+                    original_shift.date = proposed_data['date']
+                    original_shift.start_time = proposed_data['start_time']
+                    original_shift.end_time = proposed_data['end_time']
+                    original_shift.shift_type = proposed_data['shift_type']
+                    original_shift.notes = f"Intercambiado - {proposed_data['notes']}" if proposed_data['notes'] else "Turno intercambiado"
+                    original_shift.save()
+                    
+                    logger.info(f"✅ Turno 1 actualizado: Employee={original_employee.id}, Date={original_shift.date}")
+                    
+                    # Proposed shift ahora tiene datos del original pero con empleado propuesto
+                    proposed_shift.employee = proposed_employee
+                    proposed_shift.date = original_data['date']
+                    proposed_shift.start_time = original_data['start_time']
+                    proposed_shift.end_time = original_data['end_time']
+                    proposed_shift.shift_type = original_data['shift_type']
+                    proposed_shift.notes = f"Intercambiado - {original_data['notes']}" if original_data['notes'] else "Turno intercambiado"
+                    proposed_shift.save()
+                    
+                    logger.info(f"✅ Turno 2 actualizado: Employee={proposed_employee.id}, Date={proposed_shift.date}")
+                    logger.info(f"🎉 Intercambio completado exitosamente")
                     
                 else:
                     # Solo liberar el turno (sin compañero propuesto)
-                    # El gerente debe reasignar manualmente
                     logger.info(f"⚠️ Turno {original_shift.id} aprobado para cambio sin propuesta")
                 
             elif action == 'reject':
