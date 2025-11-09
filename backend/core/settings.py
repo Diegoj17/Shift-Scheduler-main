@@ -91,10 +91,11 @@ AUTH_PASSWORD_VALIDATORS = [
 ]
 
 AUTH_USER_MODEL = "users.User"
-LANGUAGE_CODE = "es"
-TIME_ZONE = 'UTC'
-USE_I18N = True
-USE_TZ = True
+LANGUAGE_CODE = "es-co"  # ✅ Español de Colombia
+TIME_ZONE = 'America/Bogota'  # ✅ Zona horaria de Colombia (GMT-5)
+USE_I18N = True  # Internacionalización
+USE_L10N = True  # Localización (formatos de fecha/hora)
+USE_TZ = True # Usar zonas horarias (timestamps en UTC en BD, convertidos a local al mostrar)
 
 STATIC_URL = 'static/'
 STATIC_ROOT = os.path.join(BASE_DIR, 'staticfiles')
