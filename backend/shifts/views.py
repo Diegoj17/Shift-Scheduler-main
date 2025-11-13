@@ -569,20 +569,20 @@ class ShiftDeleteAPIView(APIView):
 @method_decorator(csrf_exempt, name='dispatch')
 class ShiftDuplicateAPIView(APIView):
     """
-    API para duplicar turnos desde un rango origen hacia un rango destino.
+    API para duplicar turnos desde un patrón origen hacia un rango destino.
     
-    ✅ NUEVO: Soporta duplicación de patrones repetidos
+    ✅ CORREGIDO: Duplica correctamente los turnos del patrón origen a cada día destino
     
     Espera JSON con:
     - start_date: Inicio del patrón origen (YYYY-MM-DD)
     - end_date: Fin del patrón origen (YYYY-MM-DD)
     - target_start_date: Inicio del período destino (YYYY-MM-DD)
-    - target_end_date: Fin del período destino (YYYY-MM-DD) [NUEVO]
+    - target_end_date: Fin del período destino (YYYY-MM-DD)
     
     Ejemplo:
-    - Origen: Lunes 10 (5 turnos)
-    - Destino: Lunes 17 al Domingo 23 (7 días)
-    - Resultado: Los 5 turnos se repiten cada día de la semana = 35 turnos
+    - Origen: 13 nov (5 turnos)
+    - Destino: 14-19 nov (6 días)
+    - Resultado: Los 5 turnos se copian a cada uno de los 6 días = 30 turnos
     """
     authentication_classes = [JWTAuthentication]
     permission_classes = [permissions.IsAuthenticated]
@@ -592,11 +592,13 @@ class ShiftDuplicateAPIView(APIView):
         logger = logging.getLogger(__name__)
         
         try:
-            # ✅ Obtener fechas
+            # ✅ Obtener fechas con los nombres correctos
             start_date_str = data.get('start_date')
             end_date_str = data.get('end_date')
             target_start_date_str = data.get('target_start_date')
-            target_end_date_str = data.get('target_end_date')  # ✅ NUEVO
+            target_end_date_str = data.get('target_end_date')
+
+            logger.info(f"📥 [Duplicate] Datos recibidos: {data}")
 
             if not all([start_date_str, end_date_str, target_start_date_str]):
                 return Response({
@@ -608,7 +610,7 @@ class ShiftDuplicateAPIView(APIView):
             source_end = datetime.fromisoformat(end_date_str).date()
             target_start = datetime.fromisoformat(target_start_date_str).date()
             
-            # ✅ Si no hay target_end_date, usar solo target_start_date (comportamiento anterior)
+            # ✅ Si no hay target_end_date, usar solo target_start_date
             if target_end_date_str:
                 target_end = datetime.fromisoformat(target_end_date_str).date()
             else:
@@ -618,11 +620,12 @@ class ShiftDuplicateAPIView(APIView):
             logger.info(f"🔄 [Duplicate] Destino: {target_start} - {target_end}")
 
         except Exception as exc:
+            logger.exception("❌ Error parseando fechas")
             return Response({
                 'error': 'Formato de fecha inválido, usar YYYY-MM-DD'
             }, status=status.HTTP_400_BAD_REQUEST)
 
-        # ✅ Obtener turnos del patrón origen
+        # ✅ Obtener TODOS los turnos del patrón origen
         source_shifts = Shift.objects.filter(
             date__range=[source_start, source_end]
         ).select_related('employee', 'shift_type')
@@ -636,12 +639,9 @@ class ShiftDuplicateAPIView(APIView):
 
         logger.info(f"📋 Turnos en patrón origen: {source_shifts.count()}")
 
-        # ✅ Calcular días del patrón origen
+        # ✅ Calcular días del patrón origen y destino
         source_days = (source_end - source_start).days + 1
-        
-        # ✅ Generar todas las fechas del período destino
         target_days = (target_end - target_start).days + 1
-        target_dates = [target_start + timedelta(days=i) for i in range(target_days)]
         
         logger.info(f"📅 Patrón: {source_days} día(s), Destino: {target_days} día(s)")
 
@@ -650,20 +650,25 @@ class ShiftDuplicateAPIView(APIView):
         conflicts = []
 
         with transaction.atomic():
-            # ✅ Para cada fecha destino
-            for target_date in target_dates:
-                # Calcular qué día del patrón corresponde (cíclico)
-                days_from_start = (target_date - target_start).days
-                pattern_day_index = days_from_start % source_days
-                pattern_date = source_start + timedelta(days=pattern_day_index)
+            # ✅ NUEVA LÓGICA: Para cada día destino
+            for day_offset in range(target_days):
+                target_date = target_start + timedelta(days=day_offset)
                 
-                logger.info(f"📌 Fecha destino {target_date} usa patrón del {pattern_date}")
+                logger.info(f"📌 Procesando día destino: {target_date}")
                 
-                # Obtener turnos del día del patrón correspondiente
-                day_shifts = source_shifts.filter(date=pattern_date)
+                # ✅ CRÍTICO: Si el patrón origen es UN SOLO DÍA, duplicar todos sus turnos a CADA día destino
+                if source_days == 1:
+                    shifts_to_duplicate = source_shifts
+                    logger.info(f"  → Duplicando {shifts_to_duplicate.count()} turnos del día origen único")
+                else:
+                    # Si el patrón es múltiples días, usar patrón cíclico
+                    pattern_day_index = day_offset % source_days
+                    pattern_date = source_start + timedelta(days=pattern_day_index)
+                    shifts_to_duplicate = source_shifts.filter(date=pattern_date)
+                    logger.info(f"  → Usando patrón del día {pattern_date} ({shifts_to_duplicate.count()} turnos)")
                 
-                # Duplicar cada turno
-                for source_shift in day_shifts:
+                # Duplicar cada turno del día correspondiente
+                for source_shift in shifts_to_duplicate:
                     # Verificar conflictos
                     conflicting_shift = Shift.objects.filter(
                         employee=source_shift.employee,
@@ -674,7 +679,7 @@ class ShiftDuplicateAPIView(APIView):
                     
                     if not conflicting_shift:
                         # Crear nuevo turno
-                        Shift.objects.create(
+                        new_shift = Shift.objects.create(
                             date=target_date,
                             start_time=source_shift.start_time,
                             end_time=source_shift.end_time,
@@ -683,7 +688,7 @@ class ShiftDuplicateAPIView(APIView):
                             notes=source_shift.notes
                         )
                         created_count += 1
-                        logger.debug(f"✅ Turno creado: {source_shift.employee} en {target_date}")
+                        logger.info(f"    ✅ Turno creado: ID={new_shift.id}, Empleado={source_shift.employee.id}, Fecha={target_date}")
                     else:
                         conflict_count += 1
                         conflicts.append({
@@ -692,7 +697,7 @@ class ShiftDuplicateAPIView(APIView):
                             'date': target_date.isoformat(),
                             'time': f"{source_shift.start_time}-{source_shift.end_time}",
                         })
-                        logger.debug(f"⚠️ Conflicto: {source_shift.employee} en {target_date}")
+                        logger.warning(f"    ⚠️ Conflicto: Empleado={source_shift.employee.id} en {target_date}")
 
         result = {
             'created': created_count,
@@ -700,7 +705,6 @@ class ShiftDuplicateAPIView(APIView):
             'conflict_items': conflicts,
             'pattern_days': source_days,
             'target_days': target_days,
-            'repetitions': (target_days + source_days - 1) // source_days  # Redondeo hacia arriba
         }
 
         logger.info(f"✅ Duplicación completada: {created_count} turnos creados, {conflict_count} conflictos")
