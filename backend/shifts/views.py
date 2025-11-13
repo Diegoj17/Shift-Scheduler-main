@@ -568,73 +568,142 @@ class ShiftDeleteAPIView(APIView):
 
 @method_decorator(csrf_exempt, name='dispatch')
 class ShiftDuplicateAPIView(APIView):
-    """API para duplicar turnos desde un rango origen hacia una fecha objetivo.
-
-    Espera JSON con: start_date, end_date, target_start_date (formato ISO YYYY-MM-DD).
-    Devuelve conteos y lista de conflictos (si los hay).
+    """
+    API para duplicar turnos desde un rango origen hacia un rango destino.
+    
+    ✅ NUEVO: Soporta duplicación de patrones repetidos
+    
+    Espera JSON con:
+    - start_date: Inicio del patrón origen (YYYY-MM-DD)
+    - end_date: Fin del patrón origen (YYYY-MM-DD)
+    - target_start_date: Inicio del período destino (YYYY-MM-DD)
+    - target_end_date: Fin del período destino (YYYY-MM-DD) [NUEVO]
+    
+    Ejemplo:
+    - Origen: Lunes 10 (5 turnos)
+    - Destino: Lunes 17 al Domingo 23 (7 días)
+    - Resultado: Los 5 turnos se repiten cada día de la semana = 35 turnos
     """
     authentication_classes = [JWTAuthentication]
     permission_classes = [permissions.IsAuthenticated]
 
     def post(self, request, *args, **kwargs):
         data = request.data
+        logger = logging.getLogger(__name__)
+        
         try:
+            # ✅ Obtener fechas
             start_date_str = data.get('start_date')
             end_date_str = data.get('end_date')
             target_start_date_str = data.get('target_start_date')
+            target_end_date_str = data.get('target_end_date')  # ✅ NUEVO
 
-            if not (start_date_str and end_date_str and target_start_date_str):
-                return Response({'error': 'start_date, end_date y target_start_date son requeridos'}, status=status.HTTP_400_BAD_REQUEST)
+            if not all([start_date_str, end_date_str, target_start_date_str]):
+                return Response({
+                    'error': 'start_date, end_date y target_start_date son requeridos'
+                }, status=status.HTTP_400_BAD_REQUEST)
 
-            start_date = datetime.fromisoformat(start_date_str).date()
-            end_date = datetime.fromisoformat(end_date_str).date()
-            target_start_date = datetime.fromisoformat(target_start_date_str).date()
+            # Parsear fechas
+            source_start = datetime.fromisoformat(start_date_str).date()
+            source_end = datetime.fromisoformat(end_date_str).date()
+            target_start = datetime.fromisoformat(target_start_date_str).date()
+            
+            # ✅ Si no hay target_end_date, usar solo target_start_date (comportamiento anterior)
+            if target_end_date_str:
+                target_end = datetime.fromisoformat(target_end_date_str).date()
+            else:
+                target_end = target_start
+
+            logger.info(f"🔄 [Duplicate] Origen: {source_start} - {source_end}")
+            logger.info(f"🔄 [Duplicate] Destino: {target_start} - {target_end}")
 
         except Exception as exc:
-            return Response({'error': 'Formato de fecha inválido, usar YYYY-MM-DD'}, status=status.HTTP_400_BAD_REQUEST)
+            return Response({
+                'error': 'Formato de fecha inválido, usar YYYY-MM-DD'
+            }, status=status.HTTP_400_BAD_REQUEST)
 
-        day_difference = (target_start_date - start_date).days
+        # ✅ Obtener turnos del patrón origen
+        source_shifts = Shift.objects.filter(
+            date__range=[source_start, source_end]
+        ).select_related('employee', 'shift_type')
 
-        source_shifts = Shift.objects.filter(date__range=[start_date, end_date]).select_related('employee', 'shift_type')
+        if not source_shifts.exists():
+            return Response({
+                'error': 'No hay turnos en el rango origen',
+                'created': 0,
+                'conflicts': 0
+            }, status=status.HTTP_400_BAD_REQUEST)
+
+        logger.info(f"📋 Turnos en patrón origen: {source_shifts.count()}")
+
+        # ✅ Calcular días del patrón origen
+        source_days = (source_end - source_start).days + 1
+        
+        # ✅ Generar todas las fechas del período destino
+        target_days = (target_end - target_start).days + 1
+        target_dates = [target_start + timedelta(days=i) for i in range(target_days)]
+        
+        logger.info(f"📅 Patrón: {source_days} día(s), Destino: {target_days} día(s)")
 
         created_count = 0
         conflict_count = 0
         conflicts = []
 
         with transaction.atomic():
-            for source_shift in source_shifts:
-                new_date = source_shift.date + timedelta(days=day_difference)
-
-                conflicting_shift = Shift.objects.filter(
-                    employee=source_shift.employee,
-                    date=new_date,
-                    start_time__lt=source_shift.end_time,
-                    end_time__gt=source_shift.start_time
-                ).exists()
-
-                if not conflicting_shift:
-                    Shift.objects.create(
-                        date=new_date,
-                        start_time=source_shift.start_time,
-                        end_time=source_shift.end_time,
+            # ✅ Para cada fecha destino
+            for target_date in target_dates:
+                # Calcular qué día del patrón corresponde (cíclico)
+                days_from_start = (target_date - target_start).days
+                pattern_day_index = days_from_start % source_days
+                pattern_date = source_start + timedelta(days=pattern_day_index)
+                
+                logger.info(f"📌 Fecha destino {target_date} usa patrón del {pattern_date}")
+                
+                # Obtener turnos del día del patrón correspondiente
+                day_shifts = source_shifts.filter(date=pattern_date)
+                
+                # Duplicar cada turno
+                for source_shift in day_shifts:
+                    # Verificar conflictos
+                    conflicting_shift = Shift.objects.filter(
                         employee=source_shift.employee,
-                        shift_type=source_shift.shift_type,
-                        notes=source_shift.notes
-                    )
-                    created_count += 1
-                else:
-                    conflict_count += 1
-                    conflicts.append({
-                        'employee_id': getattr(source_shift.employee, 'id', None),
-                        'date': new_date.isoformat(),
-                        'time': f"{source_shift.start_time}-{source_shift.end_time}",
-                    })
+                        date=target_date,
+                        start_time__lt=source_shift.end_time,
+                        end_time__gt=source_shift.start_time
+                    ).exists()
+                    
+                    if not conflicting_shift:
+                        # Crear nuevo turno
+                        Shift.objects.create(
+                            date=target_date,
+                            start_time=source_shift.start_time,
+                            end_time=source_shift.end_time,
+                            employee=source_shift.employee,
+                            shift_type=source_shift.shift_type,
+                            notes=source_shift.notes
+                        )
+                        created_count += 1
+                        logger.debug(f"✅ Turno creado: {source_shift.employee} en {target_date}")
+                    else:
+                        conflict_count += 1
+                        conflicts.append({
+                            'employee_id': source_shift.employee.id,
+                            'employee_name': f"{source_shift.employee.user.first_name} {source_shift.employee.user.last_name}".strip(),
+                            'date': target_date.isoformat(),
+                            'time': f"{source_shift.start_time}-{source_shift.end_time}",
+                        })
+                        logger.debug(f"⚠️ Conflicto: {source_shift.employee} en {target_date}")
 
         result = {
             'created': created_count,
             'conflicts': conflict_count,
             'conflict_items': conflicts,
+            'pattern_days': source_days,
+            'target_days': target_days,
+            'repetitions': (target_days + source_days - 1) // source_days  # Redondeo hacia arriba
         }
+
+        logger.info(f"✅ Duplicación completada: {created_count} turnos creados, {conflict_count} conflictos")
 
         status_code = status.HTTP_201_CREATED if conflict_count == 0 else status.HTTP_207_MULTI_STATUS
         return Response(result, status=status_code)
