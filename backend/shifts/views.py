@@ -463,6 +463,13 @@ class ShiftListAPIView(APIView):
                         'startTime': start_time_str,  # Compatibilidad
                         'endTime': end_time_str,      # Compatibilidad
                         'notes': shift.notes or '',
+                        
+                        'is_locked': shift.is_locked,
+                        'isLocked': shift.is_locked,  # Compatibilidad
+                        'lock_reason': shift.lock_reason,
+                        'lockReason': shift.lock_reason,  # Compatibilidad
+                        'locked_at': shift.locked_at.isoformat() if shift.locked_at else None,
+                        'lockedAt': shift.locked_at.isoformat() if shift.locked_at else None,
                     }
                     
                     shifts_data.append(shift_info)

@@ -87,9 +87,15 @@ class ShiftCreateSerializer(serializers.Serializer):
         date = data.get('date')
         start_time = data.get('start_time')
         end_time = data.get('end_time')
-        user_id = data.get('employee')  # ✅ Es USER_ID
+        user_id = data.get('employee')
 
-        # ✅ Permitir turnos nocturnos
+        # ✅ NUEVO: Verificar si estamos editando un turno bloqueado
+        if self.instance:
+            if self.instance.is_locked:
+                raise serializers.ValidationError({
+                    "detail": f"Este turno no puede ser editado. Motivo: {self.instance.lock_reason or 'Turno intercambiado mediante solicitud aprobada.'}"
+                })
+
         is_overnight_shift = end_time < start_time
         
         if not is_overnight_shift and start_time >= end_time:
@@ -97,8 +103,6 @@ class ShiftCreateSerializer(serializers.Serializer):
                 "La hora de inicio debe ser anterior a la de fin para turnos diurnos."
             )
 
-        # El campo `employee` puede venir como USER_ID o como EMPLOYEE_ID.
-        # Primero intentamos interpretarlo como Employee.pk (caso más probable desde el frontend).
         try:
             incoming_id = int(user_id)
         except (TypeError, ValueError):
@@ -106,7 +110,7 @@ class ShiftCreateSerializer(serializers.Serializer):
                 "employee": f"ID inválido: {user_id}"
             })
 
-        logger.info(f"🔍 [ShiftCreateSerializer] Procesando ID entrante: {incoming_id} (puede ser Employee.pk o User.pk)")
+        logger.info(f"🔍 [ShiftCreateSerializer] Procesando ID entrante: {incoming_id}")
 
         employee = None
 
@@ -118,24 +122,22 @@ class ShiftCreateSerializer(serializers.Serializer):
             # 2) Si no existe Employee con ese PK, tratar el valor como User.pk
             try:
                 user = User.objects.get(pk=incoming_id)
-                logger.info(f"✅ User encontrado: ID={user.id}, Email={getattr(user, 'email', None)}")
+                logger.info(f"✅ User encontrado: ID={user.id}")
             except User.DoesNotExist:
                 raise serializers.ValidationError({
                     "employee": f"No existe Employee ni User con ID {incoming_id}"
                 })
 
-            # Buscar Employee relacionado con el User
             emp_qs = Employee.objects.filter(user=user)
             emp_count = emp_qs.count()
             if emp_count > 1:
                 logger.error(f"❌ DUPLICADOS: User {incoming_id} tiene {emp_count} Employees!")
                 raise serializers.ValidationError({
-                    "employee": "Error: Usuario con múltiples perfiles de empleado. Contacte al administrador para limpiar la base de datos."
+                    "employee": "Error: Usuario con múltiples perfiles de empleado."
                 })
 
             employee = emp_qs.first()
             if not employee:
-                # Crear Employee si no existe (una sola vez atomically)
                 logger.info(f"⚠️ No existe Employee para User ID={user.id}, creando...")
                 with transaction.atomic():
                     employee, created = Employee.objects.select_for_update().get_or_create(
@@ -146,17 +148,14 @@ class ShiftCreateSerializer(serializers.Serializer):
                         }
                     )
                     if created:
-                        logger.info(f"✅ Employee CREADO: ID={employee.id} para User={user.email}")
-                    else:
-                        logger.info(f"✅ Employee ya existía (creado por otro proceso): ID={employee.id}")
+                        logger.info(f"✅ Employee CREADO: ID={employee.id}")
 
-        # ✅ Validar que está activo
         if not employee.is_active:
             raise serializers.ValidationError({
                 "employee": "El empleado no está activo"
             })
 
-        # ✅ Verificar solapamiento
+        # ✅ CORRECCIÓN: Aplicar exclude ANTES de verificar existencia
         if is_overnight_shift:
             conflicts_same_day = Shift.objects.filter(
                 employee=employee,
@@ -173,7 +172,17 @@ class ShiftCreateSerializer(serializers.Serializer):
                 end_time__gt='00:00:00'
             )
             
-            conflicts = conflicts_same_day.union(conflicts_next_day)
+            # ✅ CRÍTICO: Excluir instancia ANTES de verificar existencia
+            if self.instance:
+                conflicts_same_day = conflicts_same_day.exclude(pk=self.instance.pk)
+                conflicts_next_day = conflicts_next_day.exclude(pk=self.instance.pk)
+            
+            # Verificar existencia sin usar union
+            if conflicts_same_day.exists() or conflicts_next_day.exists():
+                c = conflicts_same_day.first() or conflicts_next_day.first()
+                raise serializers.ValidationError({
+                    "detail": f"Solapamiento con turno existente: {c.start_time} - {c.end_time} en {c.date}"
+                })
         else:
             conflicts = Shift.objects.filter(
                 employee=employee,
@@ -181,15 +190,15 @@ class ShiftCreateSerializer(serializers.Serializer):
                 start_time__lt=end_time,
                 end_time__gt=start_time
             )
-        
-        if self.instance:
-            conflicts = conflicts.exclude(pk=self.instance.pk)
-        
-        if conflicts.exists():
-            c = conflicts.first()
-            raise serializers.ValidationError({
-                "detail": f"Solapamiento con turno existente: {c.start_time} - {c.end_time} en {c.date}"
-            })
+            
+            if self.instance:
+                conflicts = conflicts.exclude(pk=self.instance.pk)
+            
+            if conflicts.exists():
+                c = conflicts.first()
+                raise serializers.ValidationError({
+                    "detail": f"Solapamiento con turno existente: {c.start_time} - {c.end_time} en {c.date}"
+                })
 
         # ✅ Validar ShiftType
         try:
@@ -932,33 +941,30 @@ class ShiftChangeRequestReviewSerializer(serializers.Serializer):
         from django.utils import timezone
         from django.db import transaction
         from datetime import datetime, timedelta
-        
+    
         action = validated_data.get('action')
         request = self.context.get('request')
-        
+    
         with transaction.atomic():
             if action == 'approve':
-                # ✅ Aprobar: Intercambiar turnos
                 instance.status = 'approved'
                 instance.reviewed_by = request.user
                 instance.reviewed_at = timezone.now()
                 instance.manager_comment = validated_data.get('manager_comment', 'Solicitud aprobada')
-                
+            
                 original_shift = instance.original_shift
-                
+            
                 if instance.proposed_employee and instance.proposed_shift:
                     proposed_shift = instance.proposed_shift
-                    
+                
                     logger.info(f"🔄 Iniciando intercambio:")
-                    logger.info(f"   Turno Original: Employee={original_shift.employee.id}, Date={original_shift.date}, Time={original_shift.start_time}")
-                    logger.info(f"   Turno Propuesto: Employee={proposed_shift.employee.id}, Date={proposed_shift.date}, Time={proposed_shift.start_time}")
-                    
-                    # ✅ NUEVA ESTRATEGIA: Usar fecha temporal para evitar conflictos
-                    
-                    # 1. Guardar datos
+                    logger.info(f"   Turno Original: Employee={original_shift.employee.id}, Date={original_shift.date}")
+                    logger.info(f"   Turno Propuesto: Employee={proposed_shift.employee.id}, Date={proposed_shift.date}")
+                
+                    # Guardar datos
                     original_employee = original_shift.employee
                     proposed_employee = proposed_shift.employee
-                    
+                
                     original_data = {
                         'date': original_shift.date,
                         'start_time': original_shift.start_time,
@@ -966,7 +972,7 @@ class ShiftChangeRequestReviewSerializer(serializers.Serializer):
                         'shift_type': original_shift.shift_type,
                         'notes': original_shift.notes
                     }
-                    
+                
                     proposed_data = {
                         'date': proposed_shift.date,
                         'start_time': proposed_shift.start_time,
@@ -974,59 +980,67 @@ class ShiftChangeRequestReviewSerializer(serializers.Serializer):
                         'shift_type': proposed_shift.shift_type,
                         'notes': proposed_shift.notes
                     }
-                    
-                    # 2. Mover turnos a fechas temporales (año 9999) para liberar la restricción
+                
+                    # Mover turnos a fechas temporales
                     temp_date = datetime(9999, 12, 31).date()
-                    
                     logger.info(f"📦 Moviendo turnos a fecha temporal: {temp_date}")
-                    
+                
                     original_shift.date = temp_date
                     original_shift.save(update_fields=['date'])
-                    
+                
                     proposed_shift.date = temp_date
                     proposed_shift.save(update_fields=['date'])
-                    
+                
                     logger.info(f"✅ Turnos movidos a fecha temporal")
-                    
-                    # 3. Actualizar con datos intercambiados
+                
+                    # Intercambiar datos
                     logger.info(f"🔄 Intercambiando datos...")
-                    
-                    # Original shift ahora tiene datos del propuesto pero con empleado original
+                
+                    # Original shift ahora tiene datos del propuesto
                     original_shift.employee = original_employee
                     original_shift.date = proposed_data['date']
                     original_shift.start_time = proposed_data['start_time']
                     original_shift.end_time = proposed_data['end_time']
                     original_shift.shift_type = proposed_data['shift_type']
                     original_shift.notes = f"Intercambiado - {proposed_data['notes']}" if proposed_data['notes'] else "Turno intercambiado"
+                
+                    # ✅ NUEVO: Bloquear turno para edición
+                    original_shift.is_locked = True
+                    original_shift.lock_reason = f"Intercambiado con {proposed_employee.user.first_name} {proposed_employee.user.last_name}"
+                    original_shift.locked_at = timezone.now()
                     original_shift.save()
-                    
-                    logger.info(f"✅ Turno 1 actualizado: Employee={original_employee.id}, Date={original_shift.date}")
-                    
-                    # Proposed shift ahora tiene datos del original pero con empleado propuesto
+                
+                    logger.info(f"✅ Turno 1 actualizado y bloqueado: Employee={original_employee.id}")
+                
+                    # Proposed shift ahora tiene datos del original
                     proposed_shift.employee = proposed_employee
                     proposed_shift.date = original_data['date']
                     proposed_shift.start_time = original_data['start_time']
                     proposed_shift.end_time = original_data['end_time']
                     proposed_shift.shift_type = original_data['shift_type']
                     proposed_shift.notes = f"Intercambiado - {original_data['notes']}" if original_data['notes'] else "Turno intercambiado"
+                
+                    # ✅ NUEVO: Bloquear turno para edición
+                    proposed_shift.is_locked = True
+                    proposed_shift.lock_reason = f"Intercambiado con {original_employee.user.first_name} {original_employee.user.last_name}"
+                    proposed_shift.locked_at = timezone.now()
                     proposed_shift.save()
-                    
-                    logger.info(f"✅ Turno 2 actualizado: Employee={proposed_employee.id}, Date={proposed_shift.date}")
-                    logger.info(f"🎉 Intercambio completado exitosamente")
-                    
+                
+                    logger.info(f"✅ Turno 2 actualizado y bloqueado: Employee={proposed_employee.id}")
+                    logger.info(f"🎉 Intercambio completado - Turnos bloqueados para edición")
+                
                 else:
                     # Solo liberar el turno (sin compañero propuesto)
                     logger.info(f"⚠️ Turno {original_shift.id} aprobado para cambio sin propuesta")
-                
+            
             elif action == 'reject':
-                # ✅ Rechazar: Solo actualizar estado
                 instance.status = 'rejected'
                 instance.reviewed_by = request.user
                 instance.reviewed_at = timezone.now()
                 instance.manager_comment = validated_data.get('manager_comment')
-                
-                logger.info(f"❌ Solicitud rechazada: ID={instance.id}")
             
-            instance.save()
+                logger.info(f"❌ Solicitud rechazada: ID={instance.id}")
         
+            instance.save()
+            
         return instance
