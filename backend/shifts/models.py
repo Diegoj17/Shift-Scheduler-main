@@ -91,6 +91,11 @@ class Shift(models.Model):
     shift_type = models.ForeignKey(ShiftType, on_delete=models.CASCADE)
     notes = models.TextField(blank=True, null=True)
     
+    # ✅ NUEVOS CAMPOS: Para bloquear turnos intercambiados
+    is_locked = models.BooleanField(default=False, help_text="Turno bloqueado para edición")
+    lock_reason = models.CharField(max_length=200, blank=True, null=True, help_text="Motivo del bloqueo")
+    locked_at = models.DateTimeField(blank=True, null=True, help_text="Fecha de bloqueo")
+    
     class Meta:
         unique_together = ['employee', 'date', 'start_time']
         ordering = ['date', 'start_time']
@@ -102,11 +107,6 @@ class Shift(models.Model):
     def get_shift_period(self):
         """Determina el período del turno según la lógica del frontend"""
         hour = self.start_time.hour
-        
-        # Según la lógica del frontend:
-        # Mañana: 6:00 AM - 11:59 AM (6-11)
-        # Tarde: 12:00 PM - 5:59 PM (12-17)  
-        # Noche: 6:00 PM - 5:59 AM (18-23, 0-5)
         
         if 6 <= hour < 12:
             return 'morning'
@@ -125,60 +125,69 @@ class Shift(models.Model):
     def clean(self):
         from datetime import datetime, timedelta
         
-        # ✅ PERMITIR TURNOS NOCTURNOS (cuando end_time < start_time)
         if self.start_time == self.end_time:
             raise ValidationError("La hora de inicio y fin no pueden ser iguales")
         
-        # No validamos start_time < end_time porque los turnos nocturnos son válidos
+        # ✅ VALIDACIÓN: No permitir edición de turnos bloqueados
+        if self.pk and self.is_locked:
+            original = Shift.objects.get(pk=self.pk)
+            if original.is_locked and (
+                self.date != original.date or 
+                self.start_time != original.start_time or 
+                self.end_time != original.end_time or
+                self.employee != original.employee
+            ):
+                raise ValidationError(
+                    f"Este turno está bloqueado y no puede ser editado. {self.lock_reason or 'Turno intercambiado.'}"
+                )
         
-        # ✅ VALIDACIÓN DE SOLAPAMIENTO MEJORADA PARA TURNOS NOCTURNOS
+        # VALIDACIÓN DE SOLAPAMIENTO
         if self.is_overnight():
-            # Para turnos nocturnos, verificar solapamiento en dos partes:
-            # 1. Desde start_time hasta medianoche del mismo día
-            # 2. Desde medianoche hasta end_time del día siguiente
-            
-            # Conflictos en el mismo día (parte nocturna)
             conflicts_same_day = Shift.objects.filter(
                 employee=self.employee,
                 date=self.date,
-                start_time__lt='23:59:59',  # Hasta medianoche
+                start_time__lt='23:59:59',
                 end_time__gt=self.start_time
-            ).exclude(pk=self.pk if self.pk else None)
+            )
             
-            # Conflictos en el día siguiente (parte matutina)
             next_day = self.date + timedelta(days=1)
             conflicts_next_day = Shift.objects.filter(
                 employee=self.employee,
                 date=next_day,
                 start_time__lt=self.end_time,
                 end_time__gt='00:00:00'
-            ).exclude(pk=self.pk if self.pk else None)
+            )
             
-            conflicts = conflicts_same_day.union(conflicts_next_day)
+            # ✅ Excluir antes del union
+            if self.pk:
+                conflicts_same_day = conflicts_same_day.exclude(pk=self.pk)
+                conflicts_next_day = conflicts_next_day.exclude(pk=self.pk)
             
+            if conflicts_same_day.exists() or conflicts_next_day.exists():
+                raise ValidationError("El empleado ya tiene un turno asignado en este horario")
         else:
-            # Para turnos diurnos (mismo día)
             conflicts = Shift.objects.filter(
                 employee=self.employee,
-                date=self.date
-            ).exclude(pk=self.pk if self.pk else None).filter(
-                models.Q(start_time__lt=self.end_time, end_time__gt=self.start_time)
+                date=self.date,
+                start_time__lt=self.end_time,
+                end_time__gt=self.start_time
             )
-        
-        if conflicts.exists():
-            raise ValidationError("El empleado ya tiene un turno asignado en este horario")
+            
+            if self.pk:
+                conflicts = conflicts.exclude(pk=self.pk)
+            
+            if conflicts.exists():
+                raise ValidationError("El empleado ya tiene un turno asignado en este horario")
     
     def duration_hours(self):
         """Calcula la duración en horas considerando turnos nocturnos"""
         from datetime import datetime, timedelta
         
         if self.is_overnight():
-            # Turno nocturno: calcular desde start_time hasta medianoche + desde medianoche hasta end_time
             start_dt = datetime.combine(self.date, self.start_time)
             end_dt = datetime.combine(self.date + timedelta(days=1), self.end_time)
             duration = (end_dt - start_dt).total_seconds() / 3600
         else:
-            # Turno diurno
             start_dt = datetime.combine(self.date, self.start_time)
             end_dt = datetime.combine(self.date, self.end_time)
             duration = (end_dt - start_dt).total_seconds() / 3600
@@ -187,7 +196,8 @@ class Shift(models.Model):
     
     def __str__(self):
         period = self.get_shift_period()
-        return f"{self.employee} - {self.date} {self.start_time}-{self.end_time} ({period})"
+        locked_indicator = " 🔒" if self.is_locked else ""
+        return f"{self.employee} - {self.date} {self.start_time}-{self.end_time} ({period}){locked_indicator}"
     
 class Availability(models.Model):
     """
