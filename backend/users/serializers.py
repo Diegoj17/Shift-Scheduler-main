@@ -195,6 +195,50 @@ class PasswordResetConfirmSerializer(serializers.Serializer):
         raise serializers.ValidationError("Token inválido o expirado.")
 
 
+class PasswordChangeSerializer(serializers.Serializer):
+    """Serializer para que un usuario autenticado cambie su contraseña.
+
+    Campos:
+    - old_password: contraseña actual
+    - new_password: nueva contraseña
+    - new_password_confirm: confirmación de nueva contraseña
+    """
+    old_password = serializers.CharField(write_only=True)
+    new_password = serializers.CharField(write_only=True)
+    new_password_confirm = serializers.CharField(write_only=True)
+
+    def validate(self, attrs):
+        request = self.context.get("request")
+        user = getattr(request, 'user', None)
+
+        if not user or not user.is_authenticated:
+            raise serializers.ValidationError("Autenticación requerida")
+
+        old = attrs.get('old_password')
+        new = attrs.get('new_password')
+        new2 = attrs.get('new_password_confirm')
+
+        if not user.check_password(old):
+            raise serializers.ValidationError({"old_password": "Contraseña actual incorrecta."})
+
+        if new != new2:
+            raise serializers.ValidationError({"new_password_confirm": "Las contraseñas no coinciden."})
+
+        # Nueva contraseña NO puede ser igual a la actual (misma restricción que reset)
+        if new == old:
+            raise serializers.ValidationError({"new_password": "La nueva contraseña debe ser diferente a la actual."})
+
+        # Validar fortaleza
+        try:
+            # Aplicar mismas validaciones que en el flujo de reset
+            validate_password(new)
+            validate_password_strength(new)
+        except Exception as e:
+            raise serializers.ValidationError({"new_password": str(e)})
+
+        return attrs
+
+
 class AdminCreateUserSerializer(serializers.ModelSerializer):
     password = serializers.CharField(write_only=True, required=True)
     password_confirm = serializers.CharField(write_only=True, required=True)
