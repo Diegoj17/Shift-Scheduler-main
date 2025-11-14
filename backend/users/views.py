@@ -25,6 +25,7 @@ from .serializers import (
     AssignRolePermsSerializer,
     PasswordResetRequestSerializer,
     PasswordResetConfirmSerializer
+    , PasswordChangeSerializer
 )
 from services.email_service import get_email_service, generate_reset_token
 from django.views.decorators.csrf import ensure_csrf_cookie
@@ -523,6 +524,31 @@ class AdminBlockUserView(APIView):
         response = Response({"message": "Usuario bloqueado con éxito."}, status=200)
         response["Access-Control-Allow-Origin"] = request.headers.get('Origin', '*')
         return response
+
+
+class PasswordChangeView(APIView):
+    """Endpoint para que el usuario autenticado cambie su propia contraseña.
+
+    Método: POST
+    Body: { "old_password": "..", "new_password": "..", "new_password_confirm": ".." }
+    """
+    permission_classes = [permissions.IsAuthenticated]
+
+    def post(self, request):
+        serializer = PasswordChangeSerializer(data=request.data, context={"request": request})
+        if not serializer.is_valid():
+            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+        user = request.user
+        new_pw = serializer.validated_data['new_password']
+        user.set_password(new_pw)
+        user.save()
+
+        # Enviar cabeceras CORS para compatibilidad con frontend
+        resp = Response({"message": "Contraseña actualizada correctamente."}, status=200)
+        resp["Access-Control-Allow-Origin"] = request.headers.get('Origin', '*')
+        resp["Access-Control-Allow-Credentials"] = "true"
+        return resp
 
 
 User = get_user_model()
