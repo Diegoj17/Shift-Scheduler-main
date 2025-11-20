@@ -136,6 +136,10 @@ Shift Scheduler
             }
             header_color = color_map.get(notification_type, '#007bff')
             
+            frontend_url = getattr(settings, 'FRONTEND_URL', 'https://shiftscheduler1.vercel.app')
+            # Ir al login en lugar de directamente al calendario
+            calendar_url = f"{frontend_url}/login"
+
             html_content = f"""
             <!DOCTYPE html>
             <html>
@@ -155,7 +159,7 @@ Shift Scheduler
                         <p>{message}</p>
                         {shift_details}
                         <div style="text-align: center; margin: 30px 0;">
-                            <a href="{getattr(settings, 'FRONTEND_URL', '')}/mi-calendario" style="display: inline-block; padding: 14px 28px; background: {header_color}; color: white; text-decoration: none; border-radius: 5px; font-weight: bold;">
+                            <a href="{calendar_url}" style="display: inline-block; padding: 14px 28px; background: {header_color}; color: white; text-decoration: none; border-radius: 5px; font-weight: bold;">
                                 Ver Mi Calendario
                             </a>
                         </div>
