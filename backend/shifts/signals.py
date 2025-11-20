@@ -102,6 +102,35 @@ def notify_shift_deleted(sender, instance, **kwargs):
 # ============================================
 
 @receiver(post_save, sender=ShiftChangeRequest)
+def notify_new_request_created(sender, instance, created, **kwargs):
+    """
+    Envía notificación cuando se crea una NUEVA solicitud a todos los gerentes/admin
+    """
+    if created:
+        try:
+            logger.info(f"🆕 [Signal] Nueva solicitud creada: ID={instance.id}")
+            
+            # ✅ Obtener todos los gerentes/admin para notificar
+            from django.contrib.auth import get_user_model
+            User = get_user_model()
+            
+            managers = User.objects.filter(
+                role__in=['ADMIN', 'GERENTE', 'MANAGER']
+            )
+            
+            logger.info(f"👔 Notificando a {managers.count()} gerentes/admin")
+            
+            for manager in managers:
+                try:
+                    notification_service.notify_request_created(instance, manager)
+                    logger.info(f"✅ Notificación enviada a {manager.email}")
+                except Exception as e:
+                    logger.error(f"❌ Error notificando a {manager.email}: {str(e)}")
+                    
+        except Exception as e:
+            logger.error(f"💥 Error en señal de nueva solicitud: {str(e)}", exc_info=True)
+
+@receiver(post_save, sender=ShiftChangeRequest)
 def notify_request_status_change(sender, instance, created, **kwargs):
     """
     Envía notificación cuando cambia el estado de una solicitud
