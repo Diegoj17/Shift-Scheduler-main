@@ -78,6 +78,7 @@ class NotificationService:
             'shift_modified': preferences.panel_shift_modified,
             'shift_cancelled': preferences.panel_shift_cancelled,
             'shift_reminder': preferences.panel_shift_reminder,
+            'request_created': preferences.panel_request_response,
             'request_approved': preferences.panel_request_response,
             'request_rejected': preferences.panel_request_response,
         }
@@ -90,6 +91,7 @@ class NotificationService:
             'shift_modified': preferences.email_shift_modified,
             'shift_cancelled': preferences.email_shift_cancelled,
             'shift_reminder': preferences.email_shift_reminder,
+            'request_created': preferences.email_request_response,
             'request_approved': preferences.email_request_response,
             'request_rejected': preferences.email_request_response,
         }
@@ -131,6 +133,7 @@ Shift Scheduler
                 'shift_modified': '#ffc107',
                 'shift_cancelled': '#dc3545', 
                 'shift_reminder': '#007bff',
+                'request_created': '#17a2b8',
                 'request_approved': '#28a745',
                 'request_rejected': '#dc3545',
             }
@@ -222,6 +225,35 @@ Shift Scheduler
             message=message,
             icon='warning',
             related_shift=shift,
+            send_email=True
+        )
+        
+    
+    def notify_request_created(self, request, manager_user):
+        """Notifica a gerentes/admin cuando se crea una NUEVA solicitud"""
+        title = "Nueva Solicitud de Cambio"
+    
+        # Obtener información del empleado solicitante
+        requester_name = "Empleado desconocido"
+        if request.requesting_employee and request.requesting_employee.user:
+            requester_name = request.requesting_employee.user.get_full_name() or request.requesting_employee.user.email
+    
+        # Obtener información del turno original
+        shift_info = ""
+        if request.original_shift:
+            shift_date = request.original_shift.date.strftime('%d/%m/%Y')
+            shift_time = f"{request.original_shift.start_time.strftime('%H:%M')} - {request.original_shift.end_time.strftime('%H:%M')}"
+            shift_info = f" para el turno del {shift_date} ({shift_time})"
+    
+        message = f"El empleado {requester_name} ha enviado una solicitud de cambio de turno{shift_info}."
+    
+        return self.create_notification(
+            user=manager_user,
+            notification_type='request_created', 
+            title=title,
+            message=message,
+            icon='info',
+            related_request=request,
             send_email=True
         )
     
