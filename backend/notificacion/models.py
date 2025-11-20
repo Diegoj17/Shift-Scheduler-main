@@ -54,7 +54,7 @@ class Notification(models.Model):
     # ✅ Relación con Shift
     related_shift = models.ForeignKey(
         'shifts.Shift',
-        on_delete=models.CASCADE,
+        on_delete=models.SET_NULL,
         null=True,
         blank=True,
         related_name='notifications',
