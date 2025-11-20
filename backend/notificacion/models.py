@@ -11,6 +11,7 @@ class Notification(models.Model):
         ('shift_modified', 'Turno Modificado'),
         ('shift_cancelled', 'Turno Cancelado'),
         ('shift_reminder', 'Recordatorio de Turno'),
+        ('request_created', 'Nueva Solicitud'),
         ('request_approved', 'Solicitud Aprobada'),
         ('request_rejected', 'Solicitud Rechazada'),
         ('info', 'Información'),
