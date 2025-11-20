@@ -759,13 +759,29 @@ class ShiftChangeRequestSerializer(serializers.Serializer):
                 "detail": "Ya existe una solicitud pendiente para este turno"
             })
         
-        # ✅ Si propone compañero, validar
+        # ✅ CORRECCIÓN: Si propone compañero, DEBE seleccionar su turno
         proposed_employee = None
         proposed_shift = None
         
-        if data.get('proposed_employee'):
+        proposed_employee_id = data.get('proposed_employee')
+        proposed_shift_id = data.get('proposed_shift')
+        
+        # Si hay empleado propuesto, debe haber turno propuesto
+        if proposed_employee_id and not proposed_shift_id:
+            raise serializers.ValidationError({
+                "proposed_shift": "Debes seleccionar el turno del compañero propuesto"
+            })
+        
+        # Si hay turno propuesto, debe haber empleado propuesto
+        if proposed_shift_id and not proposed_employee_id:
+            raise serializers.ValidationError({
+                "proposed_employee": "Debes seleccionar el compañero propuesto"
+            })
+        
+        # ✅ Si propone compañero, validar
+        if proposed_employee_id:
             try:
-                proposed_employee = Employee.objects.get(pk=data.get('proposed_employee'))
+                proposed_employee = Employee.objects.get(pk=proposed_employee_id)
             except Employee.DoesNotExist:
                 raise serializers.ValidationError({
                     "proposed_employee": "Empleado propuesto no encontrado"
@@ -777,14 +793,9 @@ class ShiftChangeRequestSerializer(serializers.Serializer):
                     "proposed_employee": "No puedes proponer un intercambio contigo mismo"
                 })
             
-            # ✅ Si hay empleado propuesto, debe haber turno propuesto
-            if not data.get('proposed_shift'):
-                raise serializers.ValidationError({
-                    "proposed_shift": "Debes especificar el turno del compañero propuesto"
-                })
-            
+            # ✅ Validar turno propuesto
             try:
-                proposed_shift = Shift.objects.get(pk=data.get('proposed_shift'))
+                proposed_shift = Shift.objects.get(pk=proposed_shift_id)
             except Shift.DoesNotExist:
                 raise serializers.ValidationError({
                     "proposed_shift": "Turno propuesto no encontrado"
