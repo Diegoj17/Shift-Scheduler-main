@@ -79,17 +79,21 @@ def notify_shift_modified(sender, instance, created, **kwargs):
 def notify_shift_deleted(sender, instance, **kwargs):
     """
     Envía notificación cuando se elimina un turno
+    ✅ MEJORADO: Más robusto con verificación de existencia
     """
     try:
-        if instance.employee and instance.employee.user:
+        # ✅ Verificar que el objeto todavía tiene referencia al employee
+        if hasattr(instance, 'employee') and instance.employee and hasattr(instance.employee, 'user'):
             user = instance.employee.user
-            logger.info(f"🗑️ Turno eliminado para {user.email}")
+            logger.info(f"🗑️ [Signal] Notificación de turno eliminado para {user.email}")
             
-            # Enviar notificación de turno cancelado
+            # ✅ Enviar notificación de turno cancelado
             notification_service.notify_shift_cancelled(instance, user)
+        else:
+            logger.warning("⚠️ [Signal] No se pudo enviar notificación - referencia a employee/user perdida")
             
     except Exception as e:
-        logger.error(f"❌ Error enviando notificación de turno eliminado: {str(e)}", exc_info=True)
+        logger.error(f"❌ Error en señal de turno eliminado: {str(e)}", exc_info=True)
 
 
 # ============================================
