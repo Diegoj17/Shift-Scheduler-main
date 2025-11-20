@@ -3,8 +3,7 @@ import logging
 from django.conf import settings
 from django.utils import timezone
 from .models import Notification, NotificationPreference
-# Importar el servicio de email que SÍ funciona
-from users.services import get_email_service
+from services.email_service import get_email_service
 
 logger = logging.getLogger(__name__)
 
