@@ -556,16 +556,31 @@ class ShiftDeleteAPIView(APIView):
     """API para eliminar un turno por pk."""
     authentication_classes = [JWTAuthentication]
     permission_classes = [permissions.IsAuthenticated]
+    
 
     def delete(self, request, pk, *args, **kwargs):
+        logger = logging.getLogger(__name__)
         try:
             shift = Shift.objects.get(pk=pk)
         except Shift.DoesNotExist:
             return Response({'error': 'Turno no encontrado'}, status=status.HTTP_404_NOT_FOUND)
 
         try:
+            # ✅ CORRECCIÓN CRÍTICA: Enviar notificación ANTES de eliminar
+            if shift.employee and shift.employee.user:
+                user = shift.employee.user
+                logger.info(f"🗑️ [ShiftDeleteAPIView] Enviando notificación de eliminación para {user.email}")
+                
+                # ✅ Enviar notificación manualmente ANTES de eliminar
+                from notificacion.services import notification_service
+                notification_service.notify_shift_cancelled(shift, user)
+            
+            # ✅ Ahora eliminar el turno (las notificaciones se eliminarán en cascada)
             shift.delete()
+            
+            logger.info(f"✅ Turno {pk} eliminado exitosamente")
             return Response({'message': 'Turno eliminado exitosamente'}, status=status.HTTP_204_NO_CONTENT)
+            
         except Exception as exc:
             logging.exception("Unhandled exception deleting Shift via API")
             if getattr(settings, 'DEBUG', False):
