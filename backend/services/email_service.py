@@ -182,6 +182,30 @@ Shift Scheduler
             logger.error(f"❌ Error enviando email de confirmación a {to_email}: {str(e)}")
             return False
 
+    def send_notification_email(self, to_email, subject, plain_text_content, html_content=None):
+        """
+        Envía un email genérico para notificaciones del sistema.
+        """
+        try:
+            if html_content is None:
+                html_content = f"<pre>{plain_text_content}</pre>"
+
+            message = Mail(
+                from_email=From(self.from_email, "Shift Scheduler"),
+                to_emails=To(to_email),
+                subject=subject,
+                html_content=html_content,
+                plain_text_content=plain_text_content
+            )
+
+            response = self.sg.send(message)
+            logger.info(f"✓ Email de notificación enviado a {to_email}. Status: {response.status_code}")
+            return response.status_code == 202
+
+        except Exception as e:
+            logger.error(f"❌ Error enviando email de notificación a {to_email}: {str(e)}", exc_info=True)
+            return False
+
 # Instancia global
 email_service = None
 
