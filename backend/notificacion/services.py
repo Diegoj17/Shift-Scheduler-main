@@ -236,7 +236,7 @@ Shift Scheduler
             title=title,
             message=message,
             icon='warning',
-            related_shift=shift,
+            related_shift=None,
             send_email=True
         )
     
