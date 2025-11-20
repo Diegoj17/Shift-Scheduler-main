@@ -1,4 +1,4 @@
-from django.db.models.signals import post_save, pre_save
+from django.db.models.signals import post_save, pre_save, post_delete
 from django.dispatch import receiver
 from .models import Shift, ShiftChangeRequest
 from notificacion.services import notification_service
@@ -74,6 +74,22 @@ def notify_shift_modified(sender, instance, created, **kwargs):
                 
         except Exception as e:
             logger.error(f"Error enviando notificación de turno modificado: {str(e)}")
+            
+@receiver(post_delete, sender=Shift)
+def notify_shift_deleted(sender, instance, **kwargs):
+    """
+    Envía notificación cuando se elimina un turno
+    """
+    try:
+        if instance.employee and instance.employee.user:
+            user = instance.employee.user
+            logger.info(f"🗑️ Turno eliminado para {user.email}")
+            
+            # Enviar notificación de turno cancelado
+            notification_service.notify_shift_cancelled(instance, user)
+            
+    except Exception as e:
+        logger.error(f"❌ Error enviando notificación de turno eliminado: {str(e)}", exc_info=True)
 
 
 # ============================================
