@@ -1,22 +1,23 @@
+# notificacion/services.py - VERSIÓN CORREGIDA
 import logging
 from django.conf import settings
 from django.utils import timezone
-from sendgrid import SendGridAPIClient
-from sendgrid.helpers.mail import Mail, To, From
 from .models import Notification, NotificationPreference
+# Importar el servicio de email que SÍ funciona
+from users.services import get_email_service
 
 logger = logging.getLogger(__name__)
 
 class NotificationService:
     """
     Servicio centralizado para crear y enviar notificaciones
-    ✅ Adaptado para trabajar con Employee -> User
+    ✅ Usa el mismo EmailService que funciona para recuperación de contraseña
     """
     
     def __init__(self):
-        api_key = settings.SENDGRID_API_KEY
-        self.sg = SendGridAPIClient(api_key) if api_key else None
-        self.from_email = settings.DEFAULT_FROM_EMAIL
+        # Usar el servicio de email que ya sabemos que funciona
+        self.email_service = get_email_service()
+        logger.info("✅ NotificationService usando EmailService funcional")
     
     def create_notification(
         self,
@@ -56,7 +57,7 @@ class NotificationService:
             
             logger.info(f"✓ Notificación creada para {user.email}: {title}")
             
-            # Enviar email si está habilitado
+            # Enviar email si está habilitado - USANDO EL SERVICIO QUE SÍ FUNCIONA
             if send_email:
                 email_enabled = self._check_email_preference(preferences, notification_type)
                 if email_enabled:
@@ -96,13 +97,26 @@ class NotificationService:
         return mapping.get(notification_type, True)
     
     def _send_notification_email(self, user, notification_type, title, message, related_shift=None):
-        """Envía el email de notificación usando SendGrid"""
+        """Envía el email de notificación usando el EmailService que SÍ funciona"""
         try:
-            # ✅ Preparar datos del turno si existe (adaptado a tu estructura)
+            # Preparar contenido del email
+            plain_content = f"""
+{title}
+
+Hola {user.get_full_name() or user.email},
+
+{message}
+
+{f"Fecha: {related_shift.date.strftime('%d/%m/%Y')} {related_shift.start_time.strftime('%H:%M')}" if related_shift else ""}
+
+---
+Shift Scheduler
+            """
+            
+            # Preparar HTML content
             shift_details = ""
             if related_shift:
                 shift_type_name = related_shift.shift_type.name if related_shift.shift_type else 'Sin tipo'
-                
                 shift_details = f"""
                 <div style="background: #f8f9fa; padding: 15px; border-radius: 5px; margin: 20px 0;">
                     <strong>📅 Detalles del Turno:</strong><br>
@@ -113,18 +127,16 @@ class NotificationService:
                 </div>
                 """
             
-            # Determinar color según tipo
             color_map = {
                 'shift_assigned': '#28a745',
                 'shift_modified': '#ffc107',
-                'shift_cancelled': '#dc3545',
+                'shift_cancelled': '#dc3545', 
                 'shift_reminder': '#007bff',
                 'request_approved': '#28a745',
                 'request_rejected': '#dc3545',
             }
             header_color = color_map.get(notification_type, '#007bff')
             
-            # Contenido HTML
             html_content = f"""
             <!DOCTYPE html>
             <html>
@@ -142,15 +154,12 @@ class NotificationService:
                     <div style="padding: 30px 20px;">
                         <h2 style="color: #333; margin-top: 0;">Hola {user.get_full_name() or user.email},</h2>
                         <p>{message}</p>
-                        
                         {shift_details}
-                        
                         <div style="text-align: center; margin: 30px 0;">
-                            <a href="{settings.FRONTEND_URL}/mi-calendario" style="display: inline-block; padding: 14px 28px; background: {header_color}; color: white; text-decoration: none; border-radius: 5px; font-weight: bold;">
+                            <a href="{getattr(settings, 'FRONTEND_URL', '')}/mi-calendario" style="display: inline-block; padding: 14px 28px; background: {header_color}; color: white; text-decoration: none; border-radius: 5px; font-weight: bold;">
                                 Ver Mi Calendario
                             </a>
                         </div>
-                        
                         <p style="color: #666; font-size: 14px;">
                             Puedes gestionar tus preferencias de notificación desde tu perfil.
                         </p>
@@ -163,41 +172,16 @@ class NotificationService:
             </html>
             """
             
-            # Contenido texto plano
-            plain_content = f"""
-{title}
-
-Hola {user.get_full_name() or user.email},
-
-{message}
-
-{f"Fecha: {related_shift.date.strftime('%d/%m/%Y')} {related_shift.start_time.strftime('%H:%M')}" if related_shift else ""}
-
----
-Shift Scheduler
-            """
+            # ✅ USAR EL MISMO SERVICIO QUE FUNCIONA PARA RECUPERACIÓN
+            subject = f"Shift Scheduler - {title}"
+            logger.info(f"📧 Enviando email de notificación a {user.email} usando EmailService")
             
-            # Enviar con SendGrid
-            if self.sg:
-                mail_message = Mail(
-                    from_email=From(self.from_email, "Shift Scheduler"),
-                    to_emails=To(user.email),
-                    subject=f"Shift Scheduler - {title}",
-                    html_content=html_content,
-                    plain_text_content=plain_content
-                )
-                
-                response = self.sg.send(mail_message)
-                
-                if response.status_code == 202:
-                    logger.info(f"✓ Email enviado a {user.email}: {title}")
-                    return True
-                else:
-                    logger.warning(f"⚠️ Email a {user.email} devolvió status {response.status_code}")
-                    return False
-            else:
-                logger.warning("⚠️ SendGrid no configurado, email no enviado")
-                return False
+            return self.email_service.send_notification_email(
+                to_email=user.email,
+                subject=subject,
+                plain_text_content=plain_content,
+                html_content=html_content
+            )
                 
         except Exception as e:
             logger.error(f"❌ Error enviando email a {user.email}: {str(e)}", exc_info=True)
