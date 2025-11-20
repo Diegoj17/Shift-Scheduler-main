@@ -21,6 +21,7 @@ from django.http import JsonResponse
 urlpatterns = [
     path("admin/", admin.site.urls),
     path("api/auth/", include("users.urls")),
-    path("api/shifts/", include("shifts.urls")),  # ← Solo esta línea para shifts
+    path("api/shifts/", include("shifts.urls")), 
+    path("api/notifications/", include("notificacion.urls")),
     path("health/", lambda request: JsonResponse({"status": "ok"})),
 ]
