@@ -10,7 +10,8 @@ class EmailService:
     def __init__(self):
         api_key = os.environ.get('SENDGRID_API_KEY')
         if not api_key:
-            logger.error("SENDGRID_API_KEY no encontrada en variables de entorno")
+            logger.error("SENDGRID_API_KEY no encontrada en variables de entorno. Usando DummyEmailService en su lugar.")
+            # No levantar excepción aquí: el factory `get_email_service` la controlará y devolverá un fallback.
             raise ValueError("SENDGRID_API_KEY no configurada")
         
         self.sg = SendGridAPIClient(api_key)
@@ -114,7 +115,7 @@ Shift Scheduler
             return response.status_code == 202
             
         except Exception as e:
-            logger.error(f"❌ Error enviando email de recuperación a {to_email}: {str(e)}", exc_info=True)
+            logger.error(f"❌ Error enviando email de recuperación a {to_email}: {str(e)}")
             return False
     
     def send_password_updated_email(self, to_email, user_name=None):
@@ -203,7 +204,7 @@ Shift Scheduler
             return response.status_code == 202
 
         except Exception as e:
-            logger.error(f"❌ Error enviando email de notificación a {to_email}: {str(e)}", exc_info=True)
+            logger.error(f"❌ Error enviando email de notificación a {to_email}: {str(e)}")
             return False
 
 # Instancia global
@@ -212,7 +213,25 @@ email_service = None
 def get_email_service():
     global email_service
     if email_service is None:
-        email_service = EmailService()
+        try:
+            email_service = EmailService()
+        except Exception as e:
+            # Fallback seguro: evitar que la app o los comandos fallen si SendGrid no está disponible
+            logger.warning(f"⚠️ No se pudo inicializar EmailService ({e}). Usando DummyEmailService fallback.")
+            class DummyEmailService:
+                def send_password_reset_email(self, to_email, reset_token, user_name=None, uid=None):
+                    logger.info(f"[DummyEmailService] send_password_reset_email a {to_email} (simulado)")
+                    return False
+
+                def send_password_updated_email(self, to_email, user_name=None):
+                    logger.info(f"[DummyEmailService] send_password_updated_email a {to_email} (simulado)")
+                    return False
+
+                def send_notification_email(self, to_email, subject, plain_text_content, html_content=None):
+                    logger.info(f"[DummyEmailService] send_notification_email a {to_email} (simulado)")
+                    return False
+
+            email_service = DummyEmailService()
     return email_service
 
 def generate_reset_token(length: int = 32) -> str:
