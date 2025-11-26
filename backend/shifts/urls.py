@@ -36,4 +36,7 @@ urlpatterns = [
     
     path('employees/', views.EmployeeListAPIView.as_view(), name='employee-list'),
     path('employees/<int:employee_id>/shifts/', views.EmployeeShiftsAPIView.as_view(), name='employee-shifts'),
+    
+    path('test-reminders/', views.TestRemindersAPIView.as_view(), name='test-reminders'),
+    path('schedule-reminders/', views.ScheduleRemindersAPIView.as_view(), name='schedule-reminders'),
 ]
