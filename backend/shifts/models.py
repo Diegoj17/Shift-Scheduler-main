@@ -503,6 +503,13 @@ class ShiftReminder(models.Model):
         default='1_hour'
     )
     created_at = models.DateTimeField(auto_now_add=True)
+    celery_task_id = models.CharField(
+        max_length=255,
+        null=True,
+        blank=True,
+        verbose_name='Celery Task ID',
+        help_text='ID de la tarea Celery programada para este recordatorio'
+    )
     
     class Meta:
         verbose_name = 'Recordatorio de Turno'
