@@ -2,6 +2,7 @@ import os
 import logging
 from sendgrid import SendGridAPIClient
 from sendgrid.helpers.mail import Mail, To, From, Category
+from python_http_client.exceptions import HTTPError
 import secrets
 
 logger = logging.getLogger(__name__)
@@ -109,13 +110,29 @@ Shift Scheduler
             
             # Enviar email
             response = self.sg.send(message)
-            
             logger.info(f"✓ Email de recuperación enviado a {to_email}. Status: {response.status_code}")
-            
+            # Registrar detalle si no es 202
+            if response.status_code != 202:
+                logger.warning("⚠️ Respuesta inesperada al enviar email de recuperación:")
+                try:
+                    logger.warning(f"   Status: {response.status_code}")
+                    logger.warning(f"   Body: {getattr(response, 'body', '<no-body>')}")
+                    logger.warning(f"   Headers: {getattr(response, 'headers', '<no-headers>')}")
+                except Exception:
+                    logger.exception("Error registrando respuesta de SendGrid")
             return response.status_code == 202
-            
+
+        except HTTPError as he:
+            # HTTPError proviene del cliente HTTP de SendGrid: contiene status_code y body
+            try:
+                status = getattr(he, 'status_code', '<no-status>')
+                body = getattr(he, 'body', getattr(he, 'args', str(he)))
+                logger.error(f"❌ HTTPError enviando email de recuperación a {to_email}: status={status} body={body}")
+            except Exception:
+                logger.exception("❌ HTTPError sin detalles al enviar email de recuperación")
+            return False
         except Exception as e:
-            logger.error(f"❌ Error enviando email de recuperación a {to_email}: {str(e)}")
+            logger.error(f"❌ Error enviando email de recuperación a {to_email}: {str(e)}", exc_info=True)
             return False
     
     def send_password_updated_email(self, to_email, user_name=None):
@@ -177,10 +194,19 @@ Shift Scheduler
             
             response = self.sg.send(message)
             logger.info(f"✓ Email de confirmación enviado a {to_email}. Status: {response.status_code}")
+            if response.status_code != 202:
+                logger.warning(f"⚠️ Respuesta inesperada al enviar confirmación: status={response.status_code} body={getattr(response,'body',None)}")
             return response.status_code == 202
-            
+        except HTTPError as he:
+            try:
+                status = getattr(he, 'status_code', '<no-status>')
+                body = getattr(he, 'body', getattr(he, 'args', str(he)))
+                logger.error(f"❌ HTTPError enviando confirmación a {to_email}: status={status} body={body}")
+            except Exception:
+                logger.exception("❌ HTTPError sin detalles al enviar confirmación")
+            return False
         except Exception as e:
-            logger.error(f"❌ Error enviando email de confirmación a {to_email}: {str(e)}")
+            logger.error(f"❌ Error enviando email de confirmación a {to_email}: {str(e)}", exc_info=True)
             return False
 
     def send_notification_email(self, to_email, subject, plain_text_content, html_content=None):
@@ -201,10 +227,19 @@ Shift Scheduler
 
             response = self.sg.send(message)
             logger.info(f"✓ Email de notificación enviado a {to_email}. Status: {response.status_code}")
+            if response.status_code != 202:
+                logger.warning(f"⚠️ Respuesta inesperada al enviar notificación: status={response.status_code} body={getattr(response,'body',None)}")
             return response.status_code == 202
-
+        except HTTPError as he:
+            try:
+                status = getattr(he, 'status_code', '<no-status>')
+                body = getattr(he, 'body', getattr(he, 'args', str(he)))
+                logger.error(f"❌ HTTPError enviando notificación a {to_email}: status={status} body={body}")
+            except Exception:
+                logger.exception("❌ HTTPError sin detalles al enviar notificación")
+            return False
         except Exception as e:
-            logger.error(f"❌ Error enviando email de notificación a {to_email}: {str(e)}")
+            logger.error(f"❌ Error enviando email de notificación a {to_email}: {str(e)}", exc_info=True)
             return False
 
 # Instancia global
