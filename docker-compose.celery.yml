@@ -1,0 +1,74 @@
+version: '3.8'
+services:
+  redis:
+    image: redis:7
+    restart: unless-stopped
+    # No port published: use internal compose network so existing host Redis isn't conflicted.
+    volumes:
+      - redis_data:/data
+
+  web:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: shiftscheduler_web
+    env_file:
+      - .env
+    environment:
+      - CELERY_BROKER_URL=redis://redis:6379/0
+      - CELERY_RESULT_BACKEND=redis://redis:6379/0
+    ports:
+      - "8000:8000"
+    depends_on:
+      - redis
+
+  worker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: shiftscheduler_worker
+    env_file:
+      - .env
+    environment:
+      - CELERY_BROKER_URL=redis://redis:6379/0
+      - CELERY_RESULT_BACKEND=redis://redis:6379/0
+    depends_on:
+      - redis
+    command: ["celery", "-A", "core", "worker", "-l", "info", "-Q", "celery", "-n", "worker1@%h"]
+    # Mount code for development convenience (optional)
+    volumes:
+      - ./backend:/app
+
+  beat:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: shiftscheduler_beat
+    env_file:
+      - .env
+    environment:
+      - CELERY_BROKER_URL=redis://redis:6379/0
+      - CELERY_RESULT_BACKEND=redis://redis:6379/0
+    depends_on:
+      - redis
+    command: ["celery", "-A", "core", "beat", "-l", "info", "--scheduler", "django_celery_beat.schedulers:DatabaseScheduler"]
+    volumes:
+      - ./backend:/app
+
+  flower:
+    image: python:3.11-slim
+    container_name: shiftscheduler_flower
+    env_file:
+      - .env
+    depends_on:
+      - redis
+    command: bash -lc "pip install celery flower && celery -A core flower --port=5555 --address=0.0.0.0"
+    ports:
+      - "5555:5555"
+    volumes:
+      - ./backend:/app
+
+# Optional: volume mounts could be added for local code sync during development
+volumes:
+  redis_data:
+    driver: local

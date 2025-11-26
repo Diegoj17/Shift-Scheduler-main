@@ -6,6 +6,23 @@ from django.utils import timezone
 from .models import Notification, NotificationPreference
 from .serializers import NotificationSerializer, NotificationPreferenceSerializer
 from rest_framework.pagination import PageNumberPagination
+from django.views.decorators.csrf import csrf_exempt
+from django.http import HttpResponse, JsonResponse
+import json
+import logging
+
+logger = logging.getLogger(__name__)
+from django.conf import settings
+import base64
+
+try:
+    from cryptography.hazmat.primitives import hashes
+    from cryptography.hazmat.primitives.asymmetric import ec, padding
+    from cryptography.hazmat.primitives.serialization import load_pem_public_key
+    from cryptography.exceptions import InvalidSignature
+    CRYPTO_AVAILABLE = True
+except Exception:
+    CRYPTO_AVAILABLE = False
 
 
 class StandardResultsSetPagination(PageNumberPagination):
@@ -114,6 +131,90 @@ class NotificationViewSet(viewsets.ModelViewSet):
         notification = self.get_object()
         notification.delete()
         return Response(status=status.HTTP_204_NO_CONTENT)
+
+
+@csrf_exempt
+def sendgrid_event_webhook(request):
+    """
+    Endpoint para recibir eventos del Event Webhook de SendGrid.
+    Recibe un JSON array con uno o más eventos y los procesa.
+    - Para pruebas locales, puedes deshabilitar la firma en SendGrid y usar ngrok.
+    - Para producción, habilita la verificación de firma en SendGrid y valida los headers.
+    """
+    if request.method != 'POST':
+        return HttpResponse(status=405)
+
+    # Verificar firma si está habilitado en settings
+    if getattr(settings, 'SENDGRID_VERIFY_SIGNATURE', False):
+        sig_header = request.META.get('HTTP_X_TWILIO_EMAIL_EVENT_WEBHOOK_SIGNATURE')
+        ts_header = request.META.get('HTTP_X_TWILIO_EMAIL_EVENT_WEBHOOK_TIMESTAMP')
+        pubkey = getattr(settings, 'SENDGRID_WEBHOOK_PUBLIC_KEY', None)
+
+        if not CRYPTO_AVAILABLE:
+            logger.error('cryptography no está disponible; no se puede verificar firma')
+            return HttpResponse(status=500)
+
+        if not sig_header or not ts_header or not pubkey:
+            logger.warning('Falta firma/timestamp/clave pública para verificar webhook')
+            return HttpResponse(status=400)
+
+        try:
+            payload_bytes = request.body
+            signed = ts_header.encode('utf-8') + payload_bytes
+
+            # Preparar clave pública: puede venir base64 o ya en PEM
+            pub = pubkey.strip()
+            if not pub.startswith('-----BEGIN'):
+                # envolver en PEM
+                pub = '-----BEGIN PUBLIC KEY-----\n' + pub + '\n-----END PUBLIC KEY-----\n'
+
+            public_key = load_pem_public_key(pub.encode('utf-8'))
+
+            signature = base64.b64decode(sig_header)
+
+            # Intentar verificación ECDSA (SendGrid usa ECDSA P-256 en la mayoría de cuentas)
+            try:
+                public_key.verify(signature, signed, ec.ECDSA(hashes.SHA256()))
+            except InvalidSignature:
+                # Probar RSA PKCS1v15 por compatibilidad
+                try:
+                    public_key.verify(signature, signed, padding.PKCS1v15(), hashes.SHA256())
+                except InvalidSignature:
+                    logger.warning('Firma inválida en webhook SendGrid')
+                    return HttpResponse(status=403)
+        except Exception:
+            logger.exception('Error verificando firma del webhook SendGrid')
+            return HttpResponse(status=400)
+
+    try:
+        payload = request.body.decode('utf-8')
+        events = json.loads(payload)
+    except Exception:
+        logger.exception('Payload inválido en webhook SendGrid')
+        return HttpResponse(status=400)
+
+    # events es una lista de objetos con key 'event' (p.ej. 'bounce','delivered','open','click','spamreport')
+    for ev in events:
+        try:
+            logger.info(f"SendGrid event recibido: {ev}")
+
+            ev_type = ev.get('event')
+            email = ev.get('email')
+
+            # Ejemplo de acciones: si hay bounce/spamreport/dropped -> marcar usuario en supresión
+            if ev_type in ('bounce', 'dropped', 'spamreport'):
+                logger.warning(f"Evento de supresión: {ev_type} para {email}")
+                # Aquí puedes marcar el usuario como no susceptible a emails o guardar el evento en DB
+                # from .models import EmailSuppression  # ejemplo
+                # EmailSuppression.objects.create(email=email, event=ev_type, raw=ev)
+
+            # Si necesitas otras acciones, amplia este bloque (p.ej. delivered -> confirmar entrega)
+
+        except Exception:
+            logger.exception('Error procesando evento SendGrid')
+            continue
+
+    return JsonResponse({'received': len(events)})
 
 class NotificationPreferenceViewSet(viewsets.ModelViewSet):
     """
