@@ -216,13 +216,24 @@ Shift Scheduler
             preferences, _ = NotificationPreference.objects.get_or_create(user=user)
             
             # Programar recordatorios según preferencias
-            reminders_to_schedule = []
             from shifts.models import ShiftReminder
-            
+
+            # Eliminar recordatorios previos para este turno/usuario para evitar duplicados
+            try:
+                deleted = ShiftReminder.objects.filter(shift=shift, user=user).delete()
+                if deleted and deleted[0] > 0:
+                    logger.info(f"♻️ Eliminados {deleted[0]} recordatorios previos para turno {shift.id}")
+            except Exception:
+                logger.exception("No se pudieron eliminar recordatorios previos")
+
+            reminders_to_schedule = []
+
             # Recordatorio 1 hora antes
             if preferences.email_shift_reminder or preferences.panel_shift_reminder:
-                reminder_1h = shift_datetime - timezone.timedelta(hours=1)
-                if reminder_1h > timezone.now():
+                from datetime import timedelta
+                reminder_1h = shift_datetime - timedelta(hours=1)
+                now = timezone.now()
+                if reminder_1h > now:
                     reminders_to_schedule.append(ShiftReminder(
                         shift=shift,
                         user=user,
@@ -230,11 +241,23 @@ Shift Scheduler
                         reminder_type='1_hour'
                     ))
                     logger.info(f"⏰ Programado recordatorio 1h para turno {shift.id} a las {reminder_1h}")
-            
+                else:
+                    # Si la hora del recordatorio ya pasó recientemente (ej. se modificó el turno),
+                    # enviar la notificación inmediatamente para no perder el recordatorio.
+                    # Consideramos "recientemente" como dentro de la última hora.
+                    if reminder_1h > now - timedelta(hours=1):
+                        try:
+                            logger.info(f"⚡ Recordatorio 1h ya pasó recientemente para turno {shift.id}; enviando ahora")
+                            self.notify_shift_reminder(shift, user, '1_hour')
+                        except Exception:
+                            logger.exception("Error enviando recordatorio 1h inmediato")
+
             # Recordatorio 30 minutos antes
             if preferences.email_shift_reminder or preferences.panel_shift_reminder:
-                reminder_30m = shift_datetime - timezone.timedelta(minutes=30)
-                if reminder_30m > timezone.now():
+                from datetime import timedelta
+                reminder_30m = shift_datetime - timedelta(minutes=30)
+                now = timezone.now()
+                if reminder_30m > now:
                     reminders_to_schedule.append(ShiftReminder(
                         shift=shift,
                         user=user,
@@ -242,7 +265,16 @@ Shift Scheduler
                         reminder_type='30_min'
                     ))
                     logger.info(f"⏰ Programado recordatorio 30min para turno {shift.id} a las {reminder_30m}")
-            
+                else:
+                    # Si la hora del recordatorio ya pasó recientemente (ej. se modificó el turno),
+                    # enviar la notificación inmediatamente. Consideramos "recientemente" como últimos 30 minutos.
+                    if reminder_30m > now - timedelta(minutes=30):
+                        try:
+                            logger.info(f"⚡ Recordatorio 30min ya pasó recientemente para turno {shift.id}; enviando ahora")
+                            self.notify_shift_reminder(shift, user, '30_min')
+                        except Exception:
+                            logger.exception("Error enviando recordatorio 30min inmediato")
+
             # Crear recordatorios programados
             if reminders_to_schedule:
                 ShiftReminder.objects.bulk_create(reminders_to_schedule)
