@@ -1,6 +1,6 @@
-# shifts/signals.py - VERSIÓN COMPLETA CON GESTIÓN DE RECORDATORIOS
 from django.db.models.signals import post_save, pre_save, post_delete
 from django.dispatch import receiver
+from django.db import transaction
 from .models import Shift, ShiftChangeRequest, ShiftReminder
 from notificacion.services import notification_service
 import logging
@@ -8,163 +8,265 @@ import logging
 logger = logging.getLogger(__name__)
 
 # ============================================
-# SEÑALES PARA TURNOS CON GESTIÓN DE RECORDATORIOS
+# SEÑALES PARA TURNOS - AUTOMÁTICO CON RECORDATORIOS
 # ============================================
-
-@receiver(post_save, sender=Shift)
-def manage_shift_notifications_and_reminders(sender, instance, created, **kwargs):
-    """
-    Gestiona notificaciones y recordatorios cuando se crea/modifica un turno
-    """
-    if instance.employee and instance.employee.user:
-        try:
-            user = instance.employee.user
-            
-            if created:
-                # Nuevo turno - notificar y programar recordatorios
-                logger.info(f"📅 Nuevo turno creado para {user.email}")
-                notification_service.notify_shift_assigned(instance, user)
-            else:
-                # Turno modificado - verificar si hay cambios relevantes
-                if hasattr(instance, '_notify_modification') and instance._notify_modification:
-                    logger.info(f"📝 Turno modificado para {user.email}")
-                    notification_service.notify_shift_modified(instance, user)
-                    
-        except Exception as e:
-            logger.error(f"Error en señal de turno creado/modificado: {str(e)}")
 
 @receiver(pre_save, sender=Shift)
 def track_shift_changes(sender, instance, **kwargs):
     """
-    Detecta cambios en un turno existente para reprogramar recordatorios
+    ✅ PASO 1: Detecta cambios ANTES de guardar
+    Para saber si debemos reprogramar recordatorios
     """
-    if instance.pk:  # Solo si el turno ya existe
+    if instance.pk:  # Solo si el turno YA existe (es una actualización)
         try:
             old_shift = Shift.objects.get(pk=instance.pk)
             
-            # ✅ Detectar cambios relevantes que requieren reprogramar recordatorios
-            changes_detected = (
-                old_shift.date != instance.date or
-                old_shift.start_time != instance.start_time or
-                old_shift.end_time != instance.end_time or
-                old_shift.employee != instance.employee
-            )
+            # ✅ Detectar cambios relevantes que afectan recordatorios
+            date_changed = old_shift.date != instance.date
+            time_changed = old_shift.start_time != instance.start_time or old_shift.end_time != instance.end_time
+            employee_changed = old_shift.employee != instance.employee
             
-            if changes_detected and instance.employee and instance.employee.user:
-                user = instance.employee.user
-                # Guardamos flag para notificar después del save
+            changes_detected = date_changed or time_changed or employee_changed
+            
+            if changes_detected:
+                # Guardar flags para usar después del save
                 instance._notify_modification = True
-                instance._modified_user = user
+                instance._old_employee = old_shift.employee
+                
+                logger.info(f"📝 Cambios detectados en turno {instance.id}:")
+                if date_changed:
+                    logger.info(f"   - Fecha: {old_shift.date} → {instance.date}")
+                if time_changed:
+                    logger.info(f"   - Hora: {old_shift.start_time} → {instance.start_time}")
+                if employee_changed:
+                    logger.info(f"   - Empleado: {old_shift.employee} → {instance.employee}")
+            else:
+                instance._notify_modification = False
                 
         except Shift.DoesNotExist:
-            pass
+            # El turno no existía antes (caso raro, debería ser created=True)
+            instance._notify_modification = False
         except Exception as e:
-            logger.error(f"Error rastreando cambios de turno: {str(e)}")
+            logger.error(f"❌ Error rastreando cambios de turno: {str(e)}", exc_info=True)
+            instance._notify_modification = False
+
+
+@receiver(post_save, sender=Shift)
+def manage_shift_notifications_and_reminders(sender, instance, created, **kwargs):
+    """
+    ✅ PASO 2: AUTOMÁTICO - Notifica y programa recordatorios
+    Se ejecuta DESPUÉS de guardar el turno
+    """
+    # ✅ Verificar que tenga empleado asignado
+    if not instance.employee or not instance.employee.user:
+        logger.warning(f"⚠️ Turno {instance.id} sin empleado asignado, saltando notificaciones")
+        return
+    
+    try:
+        user = instance.employee.user
+        
+        if created:
+            # ========================================
+            # ✅ TURNO NUEVO: Notificar + Programar Recordatorios AUTOMÁTICAMENTE
+            # ========================================
+            logger.info(f"📅 [AUTOMÁTICO] Nuevo turno {instance.id} creado por admin para {user.email}")
+            logger.info(f"   - Fecha: {instance.date} {instance.start_time} - {instance.end_time}")
+            
+            # ✅ notify_shift_assigned YA llama a schedule_shift_reminders internamente
+            notification = notification_service.notify_shift_assigned(instance, user)
+            
+            if notification:
+                logger.info(f"✅ Notificación de asignación enviada + recordatorios programados automáticamente")
+            else:
+                logger.warning(f"⚠️ No se pudo crear notificación de asignación")
+            
+        else:
+            # ========================================
+            # ✅ TURNO ACTUALIZADO: Verificar si hubo cambios relevantes
+            # ========================================
+            should_notify = getattr(instance, '_notify_modification', False)
+            
+            if should_notify:
+                logger.info(f"📝 [AUTOMÁTICO] Turno {instance.id} modificado por admin")
+                
+                # ✅ Si cambió el empleado, notificar al empleado anterior
+                old_employee = getattr(instance, '_old_employee', None)
+                if old_employee and old_employee != instance.employee and old_employee.user:
+                    logger.info(f"   - Notificando cancelación al empleado anterior: {old_employee.user.email}")
+                    notification_service.notify_shift_cancelled(instance, old_employee.user)
+                
+                # ✅ Notificar modificación al empleado actual
+                # notify_shift_modified YA llama a reschedule_shift_reminders internamente
+                notification = notification_service.notify_shift_modified(instance, user)
+                
+                if notification:
+                    logger.info(f"✅ Notificación de modificación enviada + recordatorios reprogramados automáticamente")
+                else:
+                    logger.warning(f"⚠️ No se pudo crear notificación de modificación")
+            
+            # Limpiar flags temporales
+            if hasattr(instance, '_notify_modification'):
+                delattr(instance, '_notify_modification')
+            if hasattr(instance, '_old_employee'):
+                delattr(instance, '_old_employee')
+                
+    except Exception as e:
+        logger.error(f"❌ Error en señal post_save de turno: {str(e)}", exc_info=True)
+
 
 @receiver(post_delete, sender=Shift)
 def handle_shift_deletion(sender, instance, **kwargs):
     """
-    Maneja la eliminación de turnos - notifica y cancela recordatorios
+    ✅ AUTOMÁTICO: Cuando se elimina un turno
+    - Notifica cancelación al empleado
+    - Cancela recordatorios programados
+    - Limpia registros de ShiftReminder
     """
     try:
+        # ✅ Verificar que tengamos referencia al usuario
         if hasattr(instance, 'employee') and instance.employee and hasattr(instance.employee, 'user'):
             user = instance.employee.user
-            logger.info(f"🗑️ [Signal] Notificación de turno eliminado para {user.email}")
             
-            # ✅ Cancelar recordatorios programados
-            notification_service.cancel_shift_reminders(instance)
+            logger.info(f"🗑️ [AUTOMÁTICO] Turno {instance.id} eliminado por admin")
+            logger.info(f"   - Empleado afectado: {user.email}")
             
-            # ✅ Enviar notificación de turno cancelado
-            notification_service.notify_shift_cancelled(instance, user)
+            # ✅ Cancelar recordatorios programados (elimina de BD y Celery)
+            cancelled_count = notification_service.cancel_shift_reminders(instance)
+            logger.info(f"   - {cancelled_count} recordatorios cancelados")
+            
+            # ✅ Notificar cancelación al empleado
+            notification = notification_service.notify_shift_cancelled(instance, user)
+            
+            if notification:
+                logger.info(f"✅ Notificación de cancelación enviada automáticamente")
+            else:
+                logger.warning(f"⚠️ No se pudo crear notificación de cancelación")
         else:
-            logger.warning("⚠️ [Signal] No se pudo enviar notificación - referencia a employee/user perdida")
+            logger.warning("⚠️ No se pudo enviar notificación - referencia a employee/user perdida")
+            
+        # ✅ Limpiar recordatorios huérfanos (por si acaso)
+        deleted_reminders = ShiftReminder.objects.filter(shift_id=instance.id).delete()[0]
+        if deleted_reminders > 0:
+            logger.info(f"🧹 Limpiados {deleted_reminders} recordatorios huérfanos del turno {instance.id}")
             
     except Exception as e:
-        logger.error(f"❌ Error en señal de turno eliminado: {str(e)}", exc_info=True)
+        logger.error(f"❌ Error en señal post_delete de turno: {str(e)}", exc_info=True)
+
 
 # ============================================
-# SEÑALES PARA SOLICITUDES DE CAMBIO
+# SEÑALES PARA SOLICITUDES DE CAMBIO - AUTOMÁTICO
 # ============================================
 
 @receiver(post_save, sender=ShiftChangeRequest)
-def notify_new_request_created(sender, instance, created, **kwargs):
+def handle_shift_change_request(sender, instance, created, **kwargs):
     """
-    Envía notificación cuando se crea una NUEVA solicitud a todos los gerentes/admin
+    ✅ AUTOMÁTICO: Gestiona notificaciones de solicitudes de cambio
     """
-    if created:
-        try:
-            logger.info(f"🆕 [Signal] Nueva solicitud creada: ID={instance.id}")
+    try:
+        if created:
+            # ========================================
+            # ✅ NUEVA SOLICITUD: Notificar a todos los gerentes/admin
+            # ========================================
+            logger.info(f"🆕 [AUTOMÁTICO] Nueva solicitud de cambio creada: ID={instance.id}")
             
-            # ✅ Obtener todos los gerentes/admin para notificar
             from django.contrib.auth import get_user_model
             User = get_user_model()
             
+            # ✅ Obtener solo gerentes y admin (roles con mayúsculas)
             managers = User.objects.filter(
-                role__in=['ADMIN', 'GERENTE', 'MANAGER']
+                role__in=['ADMIN', 'GERENTE', 'MANAGER'],
+                is_active=True
             )
             
             logger.info(f"👔 Notificando a {managers.count()} gerentes/admin")
             
+            notified_count = 0
+            failed_count = 0
+            
             for manager in managers:
                 try:
-                    notification_service.notify_request_created(instance, manager)
-                    logger.info(f"✅ Notificación enviada a {manager.email}")
+                    notification = notification_service.notify_request_created(instance, manager)
+                    if notification:
+                        notified_count += 1
+                        logger.info(f"   ✓ {manager.email}")
+                    else:
+                        failed_count += 1
+                        logger.warning(f"   ⚠️ Falló para {manager.email}")
                 except Exception as e:
-                    logger.error(f"❌ Error notificando a {manager.email}: {str(e)}")
-                    
-        except Exception as e:
-            logger.error(f"💥 Error en señal de nueva solicitud: {str(e)}", exc_info=True)
-
-@receiver(post_save, sender=ShiftChangeRequest)
-def notify_request_status_change(sender, instance, created, **kwargs):
-    """
-    Envía notificación cuando cambia el estado de una solicitud
-    """
-    if not created:
-        try:
-            # ✅ Obtener usuario del empleado solicitante
+                    failed_count += 1
+                    logger.error(f"   ❌ Error notificando a {manager.email}: {str(e)}")
+            
+            logger.info(f"✅ Notificaciones enviadas: {notified_count} exitosas, {failed_count} fallidas")
+            
+        else:
+            # ========================================
+            # ✅ SOLICITUD ACTUALIZADA: Verificar cambio de estado
+            # ========================================
             requester_user = instance.requesting_employee.user if instance.requesting_employee else None
             
             if not requester_user:
                 logger.warning(f"⚠️ Solicitud {instance.id} sin usuario asociado")
                 return
             
-            # Notificar aprobación
+            # ✅ APROBADA
             if instance.status == 'approved':
-                logger.info(f"✅ Solicitud aprobada para {requester_user.email}")
-                notification_service.notify_request_approved(instance, requester_user)
+                logger.info(f"✅ [AUTOMÁTICO] Solicitud {instance.id} APROBADA")
+                logger.info(f"   - Solicitante: {requester_user.email}")
                 
-                # ✅ También notificar al empleado propuesto si existe
+                # Notificar al solicitante
+                notification = notification_service.notify_request_approved(instance, requester_user)
+                if notification:
+                    logger.info(f"   ✓ Notificación enviada al solicitante")
+                
+                # ✅ Si hay empleado propuesto diferente, también notificarlo
                 if instance.proposed_employee and instance.proposed_employee.user:
                     proposed_user = instance.proposed_employee.user
                     if proposed_user != requester_user:
-                        notification_service.notify_request_approved(instance, proposed_user)
+                        notification = notification_service.notify_request_approved(instance, proposed_user)
+                        if notification:
+                            logger.info(f"   ✓ Notificación enviada al empleado propuesto: {proposed_user.email}")
             
-            # Notificar rechazo
+            # ✅ RECHAZADA
             elif instance.status == 'rejected':
-                logger.info(f"❌ Solicitud rechazada para {requester_user.email}")
-                notification_service.notify_request_rejected(
+                logger.info(f"❌ [AUTOMÁTICO] Solicitud {instance.id} RECHAZADA")
+                logger.info(f"   - Solicitante: {requester_user.email}")
+                
+                reason = instance.manager_comment or "No especificado"
+                logger.info(f"   - Motivo: {reason}")
+                
+                notification = notification_service.notify_request_rejected(
                     instance,
                     requester_user,
                     reason=instance.manager_comment
                 )
                 
-        except Exception as e:
-            logger.error(f"Error enviando notificación de solicitud: {str(e)}", exc_info=True)
+                if notification:
+                    logger.info(f"   ✓ Notificación de rechazo enviada")
+                
+    except Exception as e:
+        logger.error(f"❌ Error en señal de solicitud de cambio: {str(e)}", exc_info=True)
+
 
 # ============================================
-# SEÑAL PARA LIMPIAR RECORDATORIOS CUANDO SE ELIMINA UN TURNO
+# SEÑAL DE LIMPIEZA - PREVENCIÓN DE HUÉRFANOS
 # ============================================
 
 @receiver(post_delete, sender=Shift)
-def cleanup_shift_reminders(sender, instance, **kwargs):
+def cleanup_orphaned_reminders(sender, instance, **kwargs):
     """
-    Limpia recordatorios cuando se elimina un turno
+    ✅ Limpieza de seguridad: Elimina recordatorios huérfanos
+    Se ejecuta DESPUÉS de eliminar el turno
     """
     try:
-        # Eliminar recordatorios asociados al turno
-        deleted_count = ShiftReminder.objects.filter(shift=instance).delete()[0]
-        if deleted_count > 0:
-            logger.info(f"🧹 Eliminados {deleted_count} recordatorios del turno {instance.id}")
+        # Buscar recordatorios que referencien este turno
+        # (no deberían existir si cancel_shift_reminders funcionó)
+        orphaned_reminders = ShiftReminder.objects.filter(shift_id=instance.id)
+        count = orphaned_reminders.count()
+        
+        if count > 0:
+            logger.warning(f"⚠️ Encontrados {count} recordatorios huérfanos del turno {instance.id}")
+            deleted = orphaned_reminders.delete()[0]
+            logger.info(f"🧹 Limpiados {deleted} recordatorios huérfanos")
+            
     except Exception as e:
-        logger.error(f"❌ Error limpiando recordatorios: {str(e)}", exc_info=True)
+        logger.error(f"❌ Error limpiando recordatorios huérfanos: {str(e)}", exc_info=True)

@@ -179,11 +179,28 @@ SENDGRID_WEBHOOK_PUBLIC_KEY = os.getenv("SENDGRID_WEBHOOK_PUBLIC_KEY")
 CELERY_BROKER_URL = os.getenv('CELERY_BROKER_URL', 'redis://localhost:6379/0')
 CELERY_RESULT_BACKEND = os.getenv('CELERY_RESULT_BACKEND', CELERY_BROKER_URL)
 
-CELERY_TASK_ALWAYS_EAGER = os.getenv('CELERY_TASK_ALWAYS_EAGER', 'False') == 'True'
+# ✅ ZONA HORARIA: Usar America/Bogota en toda la aplicación
+CELERY_TIMEZONE = 'America/Bogota'  # ⚠️ CAMBIO CRÍTICO
+CELERY_ENABLE_UTC = False  # ⚠️ CAMBIO CRÍTICO: Desactivar UTC
 
-# Usar django-celery-beat como scheduler (permite gestionar periodic tasks desde admin)
+# ✅ Usar django-celery-beat para gestionar tareas periódicas desde admin
 CELERY_BEAT_SCHEDULER = 'django_celery_beat.schedulers:DatabaseScheduler'
 
+# ✅ NO usar CELERY_TASK_ALWAYS_EAGER en producción (solo para testing)
+CELERY_TASK_ALWAYS_EAGER = os.getenv('CELERY_TASK_ALWAYS_EAGER', 'False') == 'True'
+
+# ✅ Configuración adicional para tareas programadas
+CELERY_TASK_SERIALIZER = 'json'
+CELERY_RESULT_SERIALIZER = 'json'
+CELERY_ACCEPT_CONTENT = ['json']
+CELERY_TASK_TRACK_STARTED = True
+CELERY_TASK_TIME_LIMIT = 30 * 60  # 30 minutos
+CELERY_WORKER_PREFETCH_MULTIPLIER = 1  # Procesar de una en una
+
+# ✅ Configuración de conexión con Redis
+CELERY_BROKER_CONNECTION_RETRY_ON_STARTUP = True
+CELERY_BROKER_CONNECTION_RETRY = True
+CELERY_BROKER_CONNECTION_MAX_RETRIES = 10
 EMAIL_BACKEND = "django.core.mail.backends.smtp.EmailBackend"
 EMAIL_HOST = "smtp.sendgrid.net"
 EMAIL_PORT = 587
