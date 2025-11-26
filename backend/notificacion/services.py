@@ -1,4 +1,4 @@
-# notificacion/services.py - VERSIÓN CORREGIDA
+# notificacion/services.py - VERSIÓN COMPLETA CON RECORDATORIOS
 import logging
 from django.conf import settings
 from django.utils import timezone
@@ -10,11 +10,10 @@ logger = logging.getLogger(__name__)
 class NotificationService:
     """
     Servicio centralizado para crear y enviar notificaciones
-    ✅ Usa el mismo EmailService que funciona para recuperación de contraseña
+    ✅ Incluye sistema completo de recordatorios programados
     """
     
     def __init__(self):
-        # Usar el servicio de email que ya sabemos que funciona
         self.email_service = get_email_service()
         logger.info("✅ NotificationService usando EmailService funcional")
     
@@ -56,7 +55,7 @@ class NotificationService:
             
             logger.info(f"✓ Notificación creada para {user.email}: {title}")
             
-            # Enviar email si está habilitado - USANDO EL SERVICIO QUE SÍ FUNCIONA
+            # Enviar email si está habilitado
             if send_email:
                 email_enabled = self._check_email_preference(preferences, notification_type)
                 if email_enabled:
@@ -98,7 +97,7 @@ class NotificationService:
         return mapping.get(notification_type, True)
     
     def _send_notification_email(self, user, notification_type, title, message, related_shift=None):
-        """Envía el email de notificación usando el EmailService que SÍ funciona"""
+        """Envía el email de notificación"""
         try:
             # Preparar contenido del email
             plain_content = f"""
@@ -140,7 +139,6 @@ Shift Scheduler
             header_color = color_map.get(notification_type, '#007bff')
             
             frontend_url = getattr(settings, 'FRONTEND_URL', 'https://shiftscheduler1.vercel.app')
-            # Ir al login en lugar de directamente al calendario
             calendar_url = f"{frontend_url}/login"
 
             html_content = f"""
@@ -178,7 +176,6 @@ Shift Scheduler
             </html>
             """
             
-            # ✅ USAR EL MISMO SERVICIO QUE FUNCIONA PARA RECUPERACIÓN
             subject = f"Shift Scheduler - {title}"
             logger.info(f"📧 Enviando email de notificación a {user.email} usando EmailService")
             
@@ -192,16 +189,142 @@ Shift Scheduler
         except Exception as e:
             logger.error(f"❌ Error enviando email a {user.email}: {str(e)}", exc_info=True)
             return False
+
+    # ============================================
+    # SISTEMA DE RECORDATORIOS PROGRAMADOS
+    # ============================================
     
+    def schedule_shift_reminders(self, shift):
+        """
+        Programa recordatorios automáticos para un turno
+        - 1 hora antes
+        - 30 minutos antes
+        """
+        try:
+            if not shift.employee or not shift.employee.user:
+                logger.warning(f"⚠️ No se pueden programar recordatorios - turno sin empleado: {shift.id}")
+                return
+            
+            user = shift.employee.user
+            
+            # Calcular fecha/hora del turno
+            shift_datetime = timezone.make_aware(
+                timezone.datetime.combine(shift.date, shift.start_time)
+            )
+            
+            # Obtener preferencias del usuario
+            preferences, _ = NotificationPreference.objects.get_or_create(user=user)
+            
+            # Programar recordatorios según preferencias
+            reminders_to_schedule = []
+            from shifts.models import ShiftReminder
+            
+            # Recordatorio 1 hora antes
+            if preferences.email_shift_reminder or preferences.panel_shift_reminder:
+                reminder_1h = shift_datetime - timezone.timedelta(hours=1)
+                if reminder_1h > timezone.now():
+                    reminders_to_schedule.append(ShiftReminder(
+                        shift=shift,
+                        user=user,
+                        reminder_time=reminder_1h,
+                        reminder_type='1_hour'
+                    ))
+                    logger.info(f"⏰ Programado recordatorio 1h para turno {shift.id} a las {reminder_1h}")
+            
+            # Recordatorio 30 minutos antes
+            if preferences.email_shift_reminder or preferences.panel_shift_reminder:
+                reminder_30m = shift_datetime - timezone.timedelta(minutes=30)
+                if reminder_30m > timezone.now():
+                    reminders_to_schedule.append(ShiftReminder(
+                        shift=shift,
+                        user=user,
+                        reminder_time=reminder_30m,
+                        reminder_type='30_min'
+                    ))
+                    logger.info(f"⏰ Programado recordatorio 30min para turno {shift.id} a las {reminder_30m}")
+            
+            # Crear recordatorios programados
+            if reminders_to_schedule:
+                ShiftReminder.objects.bulk_create(reminders_to_schedule)
+                logger.info(f"✅ Programados {len(reminders_to_schedule)} recordatorios para turno {shift.id}")
+            
+        except Exception as e:
+            logger.error(f"❌ Error programando recordatorios: {str(e)}", exc_info=True)
+    
+    def send_scheduled_reminders(self):
+        """
+        Envía recordatorios programados que están pendientes
+        Se ejecuta automáticamente cada minuto
+        """
+        try:
+            now = timezone.now()
+            from shifts.models import ShiftReminder
+            reminders = ShiftReminder.objects.filter(
+                reminder_time__lte=now,
+                sent=False
+            ).select_related('shift', 'user', 'shift__shift_type')
+            
+            sent_count = 0
+            for reminder in reminders:
+                try:
+                    # Enviar notificación de recordatorio
+                    self.notify_shift_reminder(reminder.shift, reminder.user, reminder.reminder_type)
+                    
+                    # Marcar como enviado
+                    reminder.sent = True
+                    reminder.save(update_fields=['sent'])
+                    sent_count += 1
+                    
+                    logger.info(f"✅ Recordatorio enviado: {reminder.id} - {reminder.reminder_type}")
+                    
+                except Exception as e:
+                    logger.error(f"❌ Error enviando recordatorio {reminder.id}: {str(e)}")
+                    continue
+            
+            logger.info(f"📨 Recordatorios procesados: {sent_count} enviados")
+            return sent_count
+            
+        except Exception as e:
+            logger.error(f"❌ Error en send_scheduled_reminders: {str(e)}", exc_info=True)
+            return 0
+    
+    def cancel_shift_reminders(self, shift):
+        """
+        Cancela recordatorios programados cuando se elimina un turno
+        """
+        try:
+            from shifts.models import ShiftReminder
+            deleted_count, _ = ShiftReminder.objects.filter(shift=shift).delete()
+            logger.info(f"🗑️ Recordatorios cancelados para turno {shift.id}: {deleted_count}")
+            return deleted_count
+        except Exception as e:
+            logger.error(f"❌ Error cancelando recordatorios: {str(e)}")
+            return 0
+    
+    def reschedule_shift_reminders(self, shift):
+        """
+        Reprograma recordatorios cuando se modifica un turno
+        """
+        try:
+            # Cancelar recordatorios existentes
+            self.cancel_shift_reminders(shift)
+            # Programar nuevos recordatorios
+            self.schedule_shift_reminders(shift)
+            logger.info(f"🔄 Recordatorios reprogramados para turno {shift.id}")
+        except Exception as e:
+            logger.error(f"❌ Error reprogramando recordatorios: {str(e)}")
+
     # ============================================
     # MÉTODOS ESPECÍFICOS PARA CADA TIPO DE NOTIFICACIÓN
-    # ✅ Adaptados para trabajar con Employee -> User
     # ============================================
     
     def notify_shift_assigned(self, shift, user):
         """Notifica cuando se asigna un turno"""
         title = "Nuevo Turno Asignado"
         message = f"Se te ha asignado un turno para el {shift.date.strftime('%d/%m/%Y')} de {shift.start_time.strftime('%H:%M')} a {shift.end_time.strftime('%H:%M')}."
+        
+        # Programar recordatorios automáticos
+        self.schedule_shift_reminders(shift)
         
         return self.create_notification(
             user=user,
@@ -218,6 +341,9 @@ Shift Scheduler
         title = "Turno Modificado"
         message = f"Tu turno del {shift.date.strftime('%d/%m/%Y')} ha sido modificado. Revisa los nuevos detalles."
         
+        # Reprogramar recordatorios
+        self.reschedule_shift_reminders(shift)
+        
         return self.create_notification(
             user=user,
             notification_type='shift_modified',
@@ -227,7 +353,57 @@ Shift Scheduler
             related_shift=shift,
             send_email=True
         )
+    
+    def notify_shift_cancelled(self, shift, user):
+        """Notifica cuando se cancela un turno"""
+        title = "Turno Cancelado"
+        message = f"Tu turno del {shift.date.strftime('%d/%m/%Y')} de {shift.start_time.strftime('%H:%M')} a {shift.end_time.strftime('%H:%M')} ha sido cancelado."
         
+        # Cancelar recordatorios programados
+        self.cancel_shift_reminders(shift)
+        
+        return self.create_notification(
+            user=user,
+            notification_type='shift_cancelled',
+            title=title,
+            message=message,
+            icon='warning',
+            related_shift=None,
+            send_email=True
+        )
+    
+    def notify_shift_reminder(self, shift, user, reminder_type='1_hour'):
+        """Envía recordatorio de turno próximo"""
+        from datetime import datetime
+        
+        title = "Recordatorio de Turno"
+        
+        # Calcular tiempo hasta el turno
+        shift_datetime = datetime.combine(shift.date, shift.start_time)
+        now = datetime.now()
+        
+        if reminder_type == '1_hour':
+            time_text = "en 1 hora"
+        elif reminder_type == '30_min':
+            time_text = "en 30 minutos"
+        else:
+            hours_until = (shift_datetime - now).total_seconds() / 3600
+            if hours_until <= 1:
+                time_text = f"en {int(hours_until * 60)} minutos"
+            else:
+                time_text = f"en {int(hours_until)} horas"
+        
+        message = f"Recordatorio: Tu turno comienza {time_text}. Fecha: {shift.date.strftime('%d/%m/%Y')} a las {shift.start_time.strftime('%H:%M')}."
+        
+        return self.create_notification(
+            user=user,
+            notification_type='shift_reminder',
+            title=title,
+            message=message,
+            icon='clock',
+            related_shift=shift,
+            send_email=True
+        )
     
     def notify_request_created(self, request, manager_user):
         """Notifica a gerentes/admin cuando se crea una NUEVA solicitud"""
@@ -254,44 +430,6 @@ Shift Scheduler
             message=message,
             icon='info',
             related_request=request,
-            send_email=True
-        )
-    
-    def notify_shift_cancelled(self, shift, user):
-        """Notifica cuando se cancela un turno"""
-        title = "Turno Cancelado"
-        message = f"Tu turno del {shift.date.strftime('%d/%m/%Y')} de {shift.start_time.strftime('%H:%M')} a {shift.end_time.strftime('%H:%M')} ha sido cancelado."
-        
-        return self.create_notification(
-            user=user,
-            notification_type='shift_cancelled',
-            title=title,
-            message=message,
-            icon='warning',
-            related_shift=None,
-            send_email=True
-        )
-    
-    def notify_shift_reminder(self, shift, user):
-        """Envía recordatorio de turno próximo"""
-        from datetime import datetime
-        
-        title = "Recordatorio de Turno"
-        
-        # Calcular horas hasta el turno
-        shift_datetime = datetime.combine(shift.date, shift.start_time)
-        now = datetime.now()
-        hours_until = (shift_datetime - now).total_seconds() / 3600
-        
-        message = f"Recordatorio: Tu turno comienza en {int(hours_until)} horas. Fecha: {shift.date.strftime('%d/%m/%Y')} a las {shift.start_time.strftime('%H:%M')}."
-        
-        return self.create_notification(
-            user=user,
-            notification_type='shift_reminder',
-            title=title,
-            message=message,
-            icon='clock',
-            related_shift=shift,
             send_email=True
         )
     

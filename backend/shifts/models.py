@@ -470,3 +470,47 @@ class ShiftChangeRequest(models.Model):
     
     def __str__(self):
         return f"Solicitud de {self.requesting_employee} - {self.get_status_display()}"
+    
+class ShiftReminder(models.Model):
+    """
+    Modelo para gestionar recordatorios programados de turnos
+    """
+    shift = models.ForeignKey(
+        Shift,
+        on_delete=models.CASCADE,
+        related_name='reminders',
+        verbose_name='Turno'
+    )
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        verbose_name='Usuario'
+    )
+    reminder_time = models.DateTimeField(
+        verbose_name='Hora del recordatorio'
+    )
+    sent = models.BooleanField(
+        default=False,
+        verbose_name='Enviado'
+    )
+    reminder_type = models.CharField(
+        max_length=20,
+        choices=[
+            ('1_hour', '1 Hora Antes'),
+            ('30_min', '30 Minutos Antes'),
+            ('15_min', '15 Minutos Antes')
+        ],
+        default='1_hour'
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    
+    class Meta:
+        verbose_name = 'Recordatorio de Turno'
+        verbose_name_plural = 'Recordatorios de Turnos'
+        indexes = [
+            models.Index(fields=['reminder_time', 'sent']),
+            models.Index(fields=['shift', 'user']),
+        ]
+    
+    def __str__(self):
+        return f"Recordatorio {self.reminder_type} - {self.user.email}"

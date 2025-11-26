@@ -1837,3 +1837,79 @@ class EmployeeShiftsAPIView(APIView):
                 'results': [],
                 'error': 'Error interno del servidor'
             }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+@method_decorator(csrf_exempt, name='dispatch')
+class TestRemindersAPIView(APIView):
+    """
+    API para probar el sistema de recordatorios manualmente
+    POST /api/shifts/test-reminders/
+    """
+    authentication_classes = [JWTAuthentication]
+    permission_classes = [permissions.IsAuthenticated]
+
+    def post(self, request, *args, **kwargs):
+        from notificacion.services import notification_service
+        
+        logger = logging.getLogger(__name__)
+        
+        try:
+            sent_count = notification_service.send_scheduled_reminders()
+            
+            return Response({
+                'message': f'Recordatorios procesados: {sent_count} enviados',
+                'sent_count': sent_count,
+                'status': 'success'
+            }, status=status.HTTP_200_OK)
+            
+        except Exception as e:
+            logger.exception("💥 Error probando recordatorios")
+            return Response({
+                'error': f'Error procesando recordatorios: {str(e)}',
+                'status': 'error'
+            }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+@method_decorator(csrf_exempt, name='dispatch')
+class ScheduleRemindersAPIView(APIView):
+    """
+    API para reprogramar recordatorios para todos los turnos futuros
+    POST /api/shifts/schedule-reminders/
+    """
+    authentication_classes = [JWTAuthentication]
+    permission_classes = [permissions.IsAuthenticated]
+
+    def post(self, request, *args, **kwargs):
+        from notificacion.services import notification_service
+        from django.utils import timezone
+        from datetime import timedelta
+        from .models import Shift
+        
+        logger = logging.getLogger(__name__)
+        
+        try:
+            # Obtener turnos futuros (próximos 30 días)
+            today = timezone.now().date()
+            future_date = today + timedelta(days=30)
+            
+            future_shifts = Shift.objects.filter(
+                date__gte=today,
+                date__lte=future_date
+            ).select_related('employee__user')
+            
+            scheduled_count = 0
+            for shift in future_shifts:
+                if shift.employee and shift.employee.user:
+                    notification_service.schedule_shift_reminders(shift)
+                    scheduled_count += 1
+            
+            return Response({
+                'message': f'Recordatorios programados para {scheduled_count} turnos futuros',
+                'scheduled_count': scheduled_count,
+                'status': 'success'
+            }, status=status.HTTP_200_OK)
+            
+        except Exception as e:
+            logger.exception("💥 Error programando recordatorios")
+            return Response({
+                'error': f'Error programando recordatorios: {str(e)}',
+                'status': 'error'
+            }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
