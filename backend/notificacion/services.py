@@ -263,24 +263,52 @@ Shift Scheduler
                 reminder_time__lte=now,
                 sent=False
             ).select_related('shift', 'user', 'shift__shift_type')
-            
+
             sent_count = 0
             for reminder in reminders:
                 try:
-                    # Enviar notificación de recordatorio
-                    self.notify_shift_reminder(reminder.shift, reminder.user, reminder.reminder_type)
-                    
-                    # Marcar como enviado
-                    reminder.sent = True
-                    reminder.save(update_fields=['sent'])
-                    sent_count += 1
-                    
-                    logger.info(f"✅ Recordatorio enviado: {reminder.id} - {reminder.reminder_type}")
-                    
+                    # Enviar notificación de recordatorio (crea Notification en panel y puede enviar email)
+                    notification = self.notify_shift_reminder(reminder.shift, reminder.user, reminder.reminder_type)
+
+                    # Comportamiento de marcado:
+                    # - Si el usuario tiene habilitado email para recordatorios, sólo marcar como 'sent'
+                    #   cuando el campo Notification.email_sent sea True (evita perder reintentos).
+                    # - Si el usuario únicamente usa panel (no email), marcar como enviado igualmente.
+                    prefs = None
+                    try:
+                        prefs = NotificationPreference.objects.filter(user=reminder.user).first()
+                    except Exception:
+                        prefs = None
+
+                    email_required = bool(prefs.email_shift_reminder) if prefs is not None else False
+
+                    if notification is None:
+                        logger.error(f"❌ No se creó Notification para el recordatorio {reminder.id}")
+                        # No marcar como enviado para intentar de nuevo
+                        continue
+
+                    if email_required:
+                        # Si se requería email, marcar como enviado sólo si Notification.email_sent == True
+                        if getattr(notification, 'email_sent', False):
+                            reminder.sent = True
+                            reminder.save(update_fields=['sent'])
+                            sent_count += 1
+                            logger.info(f"✅ Recordatorio enviado (email confirm): {reminder.id} - {reminder.reminder_type}")
+                        else:
+                            logger.warning(f"⚠️ Email no enviado para recordatorio {reminder.id}; se intentará nuevamente")
+                            # No marcar como enviado para permitir reintentos en próximas ejecuciones
+                            continue
+                    else:
+                        # Solo panel: marcar como enviado
+                        reminder.sent = True
+                        reminder.save(update_fields=['sent'])
+                        sent_count += 1
+                        logger.info(f"✅ Recordatorio enviado (panel): {reminder.id} - {reminder.reminder_type}")
+
                 except Exception as e:
-                    logger.error(f"❌ Error enviando recordatorio {reminder.id}: {str(e)}")
+                    logger.error(f"❌ Error enviando recordatorio {reminder.id}: {str(e)}", exc_info=True)
                     continue
-            
+
             logger.info(f"📨 Recordatorios procesados: {sent_count} enviados")
             return sent_count
             
