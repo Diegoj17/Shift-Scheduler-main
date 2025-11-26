@@ -174,9 +174,14 @@ SENDGRID_VERIFY_SIGNATURE = os.getenv("SENDGRID_VERIFY_SIGNATURE", "False") == "
 SENDGRID_WEBHOOK_PUBLIC_KEY = os.getenv("SENDGRID_WEBHOOK_PUBLIC_KEY")
 
 # Celery configuration
-# Define broker (Redis recomendado) via env var `CELERY_BROKER_URL`.
-# Default to local Redis: redis://localhost:6379/0
-CELERY_BROKER_URL = os.getenv('CELERY_BROKER_URL', 'redis://localhost:6379/0')
+# Permitir varios nombres de variable (Railway, Upstash, etc.) antes de caer a localhost
+DEFAULT_REDIS_URL = (
+    os.getenv('CELERY_BROKER_URL') or
+    os.getenv('REDIS_URL') or
+    os.getenv('UPSTASH_REDIS_URL') or
+    'redis://localhost:6379/0'
+)
+CELERY_BROKER_URL = os.getenv('CELERY_BROKER_URL', DEFAULT_REDIS_URL)
 CELERY_RESULT_BACKEND = os.getenv('CELERY_RESULT_BACKEND', CELERY_BROKER_URL)
 
 # ✅ ZONA HORARIA: Usar America/Bogota en toda la aplicación
