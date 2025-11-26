@@ -15,3 +15,9 @@ class NotificationsConfig(AppConfig):
         except Exception:
             # Signals module is optional; ignore if not present
             pass
+        # Importar checks para que Django los descubra en startup
+        try:
+            import notificacion.checks  # noqa
+        except Exception:
+            # No queremos romper el arranque si la comprobación falla por alguna razón
+            pass

@@ -1,6 +1,6 @@
 from django.urls import path, include
 from rest_framework.routers import DefaultRouter
-from .views import NotificationViewSet, NotificationPreferenceViewSet
+from .views import NotificationViewSet, NotificationPreferenceViewSet, sendgrid_event_webhook
 
 router = DefaultRouter()
 router.register(r'notifications', NotificationViewSet, basename='notification')
@@ -30,4 +30,8 @@ urlpatterns = [
     path('preferences/update_preferences/', 
          NotificationPreferenceViewSet.as_view({'put': 'update_preferences', 'patch': 'update_preferences'}), 
          name='notification-preferences-update'),
+    # Webhook público para recibir eventos de SendGrid
+    path('webhook/sendgrid/', 
+         sendgrid_event_webhook, 
+         name='sendgrid-event-webhook'),
 ]

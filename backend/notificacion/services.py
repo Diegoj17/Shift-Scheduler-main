@@ -260,7 +260,8 @@ Shift Scheduler
             
             # Construir fecha/hora del turno en zona horaria LOCAL
             shift_datetime_naive = timezone.datetime.combine(shift.date, shift.start_time)
-            shift_datetime_local = self.local_tz.localize(shift_datetime_naive)
+            # Usar utilidades de Django para crear datetimes aware (más robusto con DST)
+            shift_datetime_local = timezone.make_aware(shift_datetime_naive, self.local_tz)
             
             logger.info(f"🕐 [Recordatorios] Turno {shift.id}:")
             logger.info(f"   - Fecha/Hora local: {shift_datetime_local.strftime('%Y-%m-%d %H:%M %Z')}")
@@ -283,13 +284,14 @@ Shift Scheduler
                 pass
 
             reminders_to_schedule = []
-            now_local = timezone.now().astimezone(self.local_tz)
+            # Hora local y UTC usando utilidades de Django
+            now_local = timezone.localtime()
 
             # RECORDATORIO 1 HORA ANTES
             reminder_1h_local = shift_datetime_local - timedelta(hours=1)
             
             logger.info(f"   - Recordatorio 1h: {reminder_1h_local.strftime('%Y-%m-%d %H:%M %Z')}")
-            logger.info(f"   - Hora actual: {now_local.strftime('%Y-%m-%d %H:%M %Z')}")
+            logger.info(f"   - Hora actual (local): {now_local.strftime('%Y-%m-%d %H:%M %Z')}")
             
             if reminder_1h_local > now_local:
                 reminder_1h_utc = reminder_1h_local.astimezone(pytz.UTC)
@@ -332,10 +334,26 @@ Shift Scheduler
                     except Exception as e:
                         logger.exception(f"Error enviando recordatorio 30min inmediato: {e}")
 
-            # Crear recordatorios programados
+            # Crear recordatorios programados y programar task en Celery para el envío
             if reminders_to_schedule:
-                ShiftReminder.objects.bulk_create(reminders_to_schedule)
-                logger.info(f"✅ Programados {len(reminders_to_schedule)} recordatorios para turno {shift.id}")
+                created_count = 0
+                for rem in reminders_to_schedule:
+                    try:
+                        rem.save()
+                        created_count += 1
+                        logger.info(f"✅ Creado recordatorio {rem.id} para turno {shift.id} a {rem.reminder_time.strftime('%Y-%m-%d %H:%M %Z')}")
+                        try:
+                            # Programar task Celery (si está disponible)
+                            from notificacion.tasks import send_shift_reminder_task
+                            # `rem.reminder_time` está en UTC (aware), Celery acepta ETA aware en UTC
+                            send_shift_reminder_task.apply_async(args=[rem.id], eta=rem.reminder_time)
+                            logger.info(f"⏳ Task Celery programada para recordatorio {rem.id} (ETA {rem.reminder_time.strftime('%Y-%m-%d %H:%M %Z')})")
+                        except Exception as e:
+                            logger.warning(f"⚠️ No se pudo programar Celery task para recordatorio {rem.id}: {e}")
+                    except Exception as e:
+                        logger.exception(f"❌ Error creando recordatorio en BD: {e}")
+
+                logger.info(f"✅ Programados {created_count} recordatorios para turno {shift.id}")
             else:
                 logger.warning(f"⚠️ No se programaron recordatorios (todos ya pasaron)")
             
@@ -347,12 +365,14 @@ Shift Scheduler
         ✅ Envía recordatorios comparando con hora local de Colombia
         """
         try:
-            now_local = timezone.now().astimezone(self.local_tz)
-            now_utc = now_local.astimezone(pytz.UTC)
-            
-            logger.info(f"🔍 [Recordatorios] Verificando a las {now_local.strftime('%Y-%m-%d %H:%M %Z')}")
+            # Obtener instantes de tiempo: `timezone.now()` ya devuelve UTC aware cuando USE_TZ=True
+            now_utc = timezone.now()
+            now_local = timezone.localtime()
+
+            logger.info(f"🔍 [Recordatorios] Verificando a las {now_local.strftime('%Y-%m-%d %H:%M %Z')} (local) / {now_utc.strftime('%Y-%m-%d %H:%M %Z')} (UTC)")
             
             from shifts.models import ShiftReminder
+            # Comparar contra UTC directo (reminder_time se guarda en UTC)
             reminders = ShiftReminder.objects.filter(
                 reminder_time__lte=now_utc,
                 sent=False
@@ -365,7 +385,9 @@ Shift Scheduler
             
             for reminder in reminders:
                 try:
+                    # Mostrar info del recordatorio en local para depuración
                     reminder_time_local = reminder.reminder_time.astimezone(self.local_tz)
+                    logger.debug(f"   - reminder.reminder_time tzinfo: {getattr(reminder.reminder_time, 'tzinfo', None)}")
                     logger.info(f"📨 Procesando recordatorio {reminder.id}:")
                     logger.info(f"   - Hora programada (local): {reminder_time_local.strftime('%Y-%m-%d %H:%M %Z')}")
                     logger.info(f"   - Tipo: {reminder.reminder_type}")
@@ -383,23 +405,20 @@ Shift Scheduler
                     prefs = NotificationPreference.objects.filter(user=reminder.user).first()
                     email_required = prefs.email_shift_reminder if prefs else False
 
-                    if email_required:
-                        # Si se requería email, verificar que se haya enviado
-                        if getattr(notification, 'email_sent', False):
-                            reminder.sent = True
-                            reminder.save(update_fields=['sent'])
-                            sent_count += 1
-                            logger.info(f"✅ Recordatorio enviado (email): {reminder.id}")
-                        else:
-                            logger.warning(f"⚠️ Email no enviado para recordatorio {reminder.id}, se reintentará")
-                            failed_count += 1
-                            continue
-                    else:
-                        # Solo panel
+                    # Marcar recordatorio como enviado si la notificación de panel fue creada.
+                    # Si el email estaba requerido pero falló, lo registramos y seguimos marcando como enviado
+                    # para evitar que fallos de email impidan que el usuario vea la notificación en el panel.
+                    if email_required and not getattr(notification, 'email_sent', False):
+                        logger.warning(f"⚠️ Email no enviado para recordatorio {reminder.id} (usuario: {reminder.user.email}). Marcando recordatorio como enviado para evitar bloqueos.")
                         reminder.sent = True
                         reminder.save(update_fields=['sent'])
                         sent_count += 1
-                        logger.info(f"✅ Recordatorio enviado (panel): {reminder.id}")
+                        continue
+                    else:
+                        reminder.sent = True
+                        reminder.save(update_fields=['sent'])
+                        sent_count += 1
+                        logger.info(f"✅ Recordatorio enviado (panel/email): {reminder.id}")
 
                 except Exception as e:
                     logger.error(f"❌ Error enviando recordatorio {reminder.id}: {str(e)}", exc_info=True)

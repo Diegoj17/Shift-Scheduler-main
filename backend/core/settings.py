@@ -32,6 +32,7 @@ INSTALLED_APPS = [
     "users",
     "shifts",
     "notificacion",
+    "django_celery_beat",
 ]
 
 MIDDLEWARE = [
@@ -165,6 +166,24 @@ if not DEBUG:
 # ✅ CONFIGURACIÓN SEGURA DE SENDGRID - SIN CLAVES EXPUESTAS
 SENDGRID_API_KEY = os.getenv("SENDGRID_API_KEY")  # Solo variable de entorno
 
+# Opcional: clave pública para verificar firmas del Event Webhook de SendGrid
+# Copia la "Clave de verificación" desde el panel de SendGrid y pégala en la variable
+# `SENDGRID_WEBHOOK_PUBLIC_KEY` como una sola línea (PEM o base64). Para habilitar
+# la verificación marque `SENDGRID_VERIFY_SIGNATURE=True` en el entorno.
+SENDGRID_VERIFY_SIGNATURE = os.getenv("SENDGRID_VERIFY_SIGNATURE", "False") == "True"
+SENDGRID_WEBHOOK_PUBLIC_KEY = os.getenv("SENDGRID_WEBHOOK_PUBLIC_KEY")
+
+# Celery configuration
+# Define broker (Redis recomendado) via env var `CELERY_BROKER_URL`.
+# Default to local Redis: redis://localhost:6379/0
+CELERY_BROKER_URL = os.getenv('CELERY_BROKER_URL', 'redis://localhost:6379/0')
+CELERY_RESULT_BACKEND = os.getenv('CELERY_RESULT_BACKEND', CELERY_BROKER_URL)
+
+CELERY_TASK_ALWAYS_EAGER = os.getenv('CELERY_TASK_ALWAYS_EAGER', 'False') == 'True'
+
+# Usar django-celery-beat como scheduler (permite gestionar periodic tasks desde admin)
+CELERY_BEAT_SCHEDULER = 'django_celery_beat.schedulers:DatabaseScheduler'
+
 EMAIL_BACKEND = "django.core.mail.backends.smtp.EmailBackend"
 EMAIL_HOST = "smtp.sendgrid.net"
 EMAIL_PORT = 587
@@ -173,7 +192,7 @@ EMAIL_TIMEOUT = 30
 
 # Para SendGrid, el USERNAME siempre es 'apikey' y el PASSWORD es tu API Key
 EMAIL_HOST_USER = "apikey"
-EMAIL_HOST_PASSWORD = SENDGRID_API_KEY  # Usa la misma variable
+EMAIL_HOST_PASSWORD = SENDGRID_API_KEY  
 
 DEFAULT_FROM_EMAIL = os.getenv(
     "DEFAULT_FROM_EMAIL",

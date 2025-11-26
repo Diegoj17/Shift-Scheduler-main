@@ -4,21 +4,39 @@ from sendgrid import SendGridAPIClient
 from sendgrid.helpers.mail import Mail, To, From, Category
 from python_http_client.exceptions import HTTPError
 import secrets
+import time
 
 logger = logging.getLogger(__name__)
 
 class EmailService:
     def __init__(self):
-        api_key = os.environ.get('SENDGRID_API_KEY')
+        # Soportar varios nombres de variable de entorno para flexibilidad en distintos entornos
+        api_key = os.environ.get('SENDGRID_API_KEY') or os.environ.get('SENDGRID_KEY')
         if not api_key:
-            logger.error("SENDGRID_API_KEY no encontrada en variables de entorno. Usando DummyEmailService en su lugar.")
-            # No levantar excepción aquí: el factory `get_email_service` la controlará y devolverá un fallback.
+            logger.error("SENDGRID_API_KEY no encontrada en variables de entorno.")
             raise ValueError("SENDGRID_API_KEY no configurada")
-        
+
         self.sg = SendGridAPIClient(api_key)
-        self.from_email = os.environ.get('EMAIL_FROM', 'soporteshiftscheduler1@gmail.com')
+        # El email remitente puede estar en EMAIL_FROM o DEFAULT_FROM_EMAIL según despliegue
+        self.from_email = os.environ.get('EMAIL_FROM') or os.environ.get('DEFAULT_FROM_EMAIL') or 'soporteshiftscheduler1@gmail.com'
         self.frontend_url = os.environ.get('FRONTEND_URL', 'https://shiftscheduler1.vercel.app')
         logger.info(f"EmailService inicializado con from_email: {self.from_email}")
+
+        # Verificar validez de la clave (llamada de solo lectura a perfil de usuario)
+        try:
+            # Esta llamada no envía correos; valida la autenticación de la API key
+            resp = self.sg.client.user.profile.get()
+            status = getattr(resp, 'status_code', None)
+            if status and int(status) >= 200 and int(status) < 300:
+                logger.info("✔️ SendGrid API key validada correctamente")
+            else:
+                logger.warning(f"⚠️ Respuesta inesperada validando SendGrid API key: status={status}")
+        except HTTPError as he:
+            logger.exception("❌ SendGrid API key inválida o error al validar. Levantando excepción para fallback.")
+            raise
+        except Exception as e:
+            logger.exception(f"❌ Error verificando SendGrid API key: {e}")
+            raise
     
     def send_password_reset_email(self, to_email, reset_token, user_name=None, uid=None):
         """
@@ -109,18 +127,7 @@ Shift Scheduler
             # message.add_category(Category("password_reset"))
             
             # Enviar email
-            response = self.sg.send(message)
-            logger.info(f"✓ Email de recuperación enviado a {to_email}. Status: {response.status_code}")
-            # Registrar detalle si no es 202
-            if response.status_code != 202:
-                logger.warning("⚠️ Respuesta inesperada al enviar email de recuperación:")
-                try:
-                    logger.warning(f"   Status: {response.status_code}")
-                    logger.warning(f"   Body: {getattr(response, 'body', '<no-body>')}")
-                    logger.warning(f"   Headers: {getattr(response, 'headers', '<no-headers>')}")
-                except Exception:
-                    logger.exception("Error registrando respuesta de SendGrid")
-            return response.status_code == 202
+            return self._send_with_retry(message)
 
         except HTTPError as he:
             # HTTPError proviene del cliente HTTP de SendGrid: contiene status_code y body
@@ -192,11 +199,7 @@ Shift Scheduler
                 plain_text_content=plain_content
             )
             
-            response = self.sg.send(message)
-            logger.info(f"✓ Email de confirmación enviado a {to_email}. Status: {response.status_code}")
-            if response.status_code != 202:
-                logger.warning(f"⚠️ Respuesta inesperada al enviar confirmación: status={response.status_code} body={getattr(response,'body',None)}")
-            return response.status_code == 202
+            return self._send_with_retry(message)
         except HTTPError as he:
             try:
                 status = getattr(he, 'status_code', '<no-status>')
@@ -225,11 +228,7 @@ Shift Scheduler
                 plain_text_content=plain_text_content
             )
 
-            response = self.sg.send(message)
-            logger.info(f"✓ Email de notificación enviado a {to_email}. Status: {response.status_code}")
-            if response.status_code != 202:
-                logger.warning(f"⚠️ Respuesta inesperada al enviar notificación: status={response.status_code} body={getattr(response,'body',None)}")
-            return response.status_code == 202
+            return self._send_with_retry(message)
         except HTTPError as he:
             try:
                 status = getattr(he, 'status_code', '<no-status>')
@@ -241,6 +240,169 @@ Shift Scheduler
         except Exception as e:
             logger.error(f"❌ Error enviando email de notificación a {to_email}: {str(e)}", exc_info=True)
             return False
+    def send_shift_reminder_email(self, to_email, user_name, shift_date, start_time, end_time, shift_details=None):
+        """Envía email de recordatorio de turno - optimizado y seguro contra errores de formato."""
+        try:
+            # Formatear fecha y hora
+            formatted_date = shift_date.strftime("%d/%m/%Y")
+            formatted_start = start_time.strftime("%H:%M")
+            formatted_end = end_time.strftime("%H:%M")
+
+            # Bloque de detalles opcional (evitar nested f-strings dentro de la plantilla)
+            if shift_details:
+                details_block = f"""
+                        <div style="display: flex; align-items: center; margin-bottom: 10px;">
+                            <span style="background: #6f42c1; color: white; border-radius: 50%; width: 30px; height: 30px; display: flex; align-items: center; justify-content: center; margin-right: 10px;">📋</span>
+                            <strong>Detalles:</strong> {shift_details}
+                        </div>
+                """
+            else:
+                details_block = ""
+
+            html_content = f"""
+            <!DOCTYPE html>
+            <html>
+            <head>
+                <meta charset="utf-8">
+                <meta name="viewport" content="width=device-width, initial-scale=1.0">
+                <title>Recordatorio de Turno</title>
+            </head>
+            <body style="font-family: Arial, sans-serif; line-height: 1.6; color: #333; margin: 0; padding: 20px; background-color: #f4f4f4;">
+                <div style="max-width: 600px; margin: 0 auto; background-color: #ffffff; border-radius: 8px; overflow: hidden; box-shadow: 0 2px 4px rgba(0,0,0,0.1);">
+                    <div style="background: #ff9800; color: white; padding: 30px 20px; text-align: center;">
+                        <h1 style="margin: 0; font-size: 24px;">⏰ Recordatorio de Turno</h1>
+                    </div>
+                    <div style="padding: 30px 20px;">
+                        <h2 style="color: #333; margin-top: 0;">Hola {user_name},</h2>
+                        <p>Este es un recordatorio de tu próximo turno:</p>
+
+                        <div style="background: #f8f9fa; border: 1px solid #e9ecef; border-radius: 8px; padding: 20px; margin: 20px 0;">
+                            <div style="display: flex; align-items: center; margin-bottom: 10px;">
+                                <span style="background: #007bff; color: white; border-radius: 50%; width: 30px; height: 30px; display: flex; align-items: center; justify-content: center; margin-right: 10px;">📅</span>
+                                <strong>Fecha:</strong> {formatted_date}
+                            </div>
+                            <div style="display: flex; align-items: center; margin-bottom: 10px;">
+                                <span style="background: #28a745; color: white; border-radius: 50%; width: 30px; height: 30px; display: flex; align-items: center; justify-content: center; margin-right: 10px;">⏰</span>
+                                <strong>Horario:</strong> {formatted_start} - {formatted_end}
+                            </div>
+                            {details_block}
+                        </div>
+
+                        <div style="background: #fff3cd; border-left: 4px solid #ffc107; padding: 15px; margin: 20px 0;">
+                            <strong>💡 Recordatorio:</strong> Tu turno comienza pronto. Por favor asegúrate de estar disponible.
+                        </div>
+                    </div>
+                    <div style="padding: 20px; text-align: center; font-size: 12px; color: #666; background: #f8f9fa;">
+                        <p>© 2025 Shift Scheduler - Sistema de Gestión de Turnos</p>
+                    </div>
+                </div>
+            </body>
+            </html>
+            """
+
+            plain_content_lines = [
+                "Recordatorio de Turno - Shift Scheduler",
+                "",
+                f"Hola {user_name},",
+                "",
+                "Este es un recordatorio de tu próximo turno:",
+                "",
+                f"📅 Fecha: {formatted_date}",
+                f"⏰ Horario: {formatted_start} - {formatted_end}",
+            ]
+            if shift_details:
+                plain_content_lines.append(f"📋 Detalles: {shift_details}")
+            plain_content_lines.extend(["", "💡 Recordatorio: Tu turno comienza pronto. Por favor asegúrate de estar disponible.", "", "---", "Shift Scheduler - Sistema de Gestión de Turnos"])
+            plain_content = "\n".join(plain_content_lines)
+
+            message = Mail(
+                from_email=From(self.from_email, "Shift Scheduler"),
+                to_emails=To(to_email),
+                subject=f"⏰ Recordatorio de turno para el {formatted_date}",
+                html_content=html_content,
+                plain_text_content=plain_content
+            )
+
+            return self._send_with_retry(message)
+
+        except HTTPError as he:
+            try:
+                status = getattr(he, 'status_code', '<no-status>')
+                body = getattr(he, 'body', getattr(he, 'args', str(he)))
+                logger.error(f"❌ HTTPError enviando recordatorio a {to_email}: status={status} body={body}")
+            except Exception:
+                logger.exception("❌ HTTPError sin detalles al enviar recordatorio")
+            return False
+        except Exception as e:
+            logger.error(f"❌ Error enviando email de recordatorio a {to_email}: {str(e)}", exc_info=True)
+            return False
+
+    def _send_with_retry(self, message, max_retries: int = 3):
+        """Envía el `message` usando SendGrid con reintentos y backoff exponencial.
+        No reintenta en errores cliente 4xx (salvo 429), reintenta en 5xx y excepciones transitorias.
+        """
+        for attempt in range(1, max_retries + 1):
+            try:
+                response = self.sg.send(message)
+                status = getattr(response, 'status_code', None)
+                body = getattr(response, 'body', None)
+
+                # Normalizar body (puede ser bytes)
+                try:
+                    if isinstance(body, (bytes, bytearray)):
+                        body_text = body.decode('utf-8', errors='replace')
+                    else:
+                        body_text = str(body)
+                except Exception:
+                    body_text = repr(body)
+
+                logger.info(f"Envío email intento {attempt}/{max_retries}, status={status}")
+                # Log detallado bajo demanda: variable de entorno `SENDGRID_DEBUG_BODY` o logger DEBUG
+                sendgrid_debug = os.getenv('SENDGRID_DEBUG_BODY', 'False') == 'True'
+                if sendgrid_debug or logger.isEnabledFor(logging.DEBUG):
+                    logger.debug(f"SendGrid response body: {body_text}")
+
+                if status == 202:
+                    return True
+
+                # Client errors (except 429 Too Many Requests) should not be retried
+                if status and 400 <= status < 500 and status != 429:
+                    logger.error(f"Error cliente al enviar email: status={status} body={body_text}")
+                    return False
+
+                # Else: server error or unexpected status - retry
+                logger.warning(f"Respuesta inesperada de SendGrid: status={status} body={body_text}")
+
+            except HTTPError as he:
+                status = getattr(he, 'status_code', None)
+                body = getattr(he, 'body', getattr(he, 'args', str(he)))
+                try:
+                    if isinstance(body, (bytes, bytearray)):
+                        body_text = body.decode('utf-8', errors='replace')
+                    else:
+                        body_text = str(body)
+                except Exception:
+                    body_text = repr(body)
+
+                logger.error(f"HTTPError al enviar email: status={status} body={body_text}")
+                # Log detallado si está habilitado
+                sendgrid_debug = os.getenv('SENDGRID_DEBUG_BODY', 'False') == 'True'
+                if sendgrid_debug or logger.isEnabledFor(logging.DEBUG):
+                    logger.debug(f"HTTPError detalles: {he}")
+
+                if status and 400 <= status < 500 and status != 429:
+                    return False
+            except Exception as exc:
+                logger.exception(f"Excepción al enviar email (intento {attempt}): {exc}")
+
+            # Esperar antes del siguiente intento
+            if attempt < max_retries:
+                backoff = min(2 ** attempt, 60)
+                logger.info(f"Esperando {backoff}s antes de reintentar...")
+                time.sleep(backoff)
+
+        logger.error("Agotados los reintentos al enviar email")
+        return False
 
 # Instancia global
 email_service = None
@@ -266,8 +428,13 @@ def get_email_service():
                     logger.info(f"[DummyEmailService] send_notification_email a {to_email} (simulado)")
                     return False
 
+                def send_shift_reminder_email(self, to_email, user_name, shift_date, start_time, end_time, shift_details=None):
+                    logger.info(f"[DummyEmailService] send_shift_reminder_email a {to_email} (simulado)")
+                    return False
+
             email_service = DummyEmailService()
     return email_service
 
 def generate_reset_token(length: int = 32) -> str:
     return secrets.token_urlsafe(length)
+
