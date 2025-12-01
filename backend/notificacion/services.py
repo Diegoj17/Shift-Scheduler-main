@@ -363,32 +363,9 @@ Shift Scheduler
                             from notificacion.tasks import send_shift_reminder_task
                             
                             # ETA debe ser en la zona horaria de Celery (America/Bogota)
-                            # Normalizar el ETA según la configuración de Celery para evitar
-                            # desalineos entre la hora local (America/Bogota) y la hora que
-                            # interpreta el worker (usualmente UTC).
-                            try:
-                                # Obtener configuración de Celery
-                                celery_enable_utc = getattr(celery_app.conf, 'enable_utc', True)
-                            except Exception:
-                                celery_enable_utc = True
-
-                            eta_to_use = reminder.reminder_time
-                            try:
-                                if timezone.is_aware(eta_to_use):
-                                    if celery_enable_utc:
-                                        # Pasar ETA en UTC (recomendado cuando enable_utc=True)
-                                        eta_to_use = eta_to_use.astimezone(pytz.UTC)
-                                    else:
-                                        # Pasar ETA en la zona que Celery espera (usar TIME_ZONE)
-                                        eta_to_use = eta_to_use.astimezone(self.local_tz)
-                            except Exception:
-                                # Fallback: pasar el valor tal cual
-                                pass
-
-                            logger.info(f"⏳ Programando tarea Celery para reminder {reminder.id} con ETA: {eta_to_use} (tz={getattr(eta_to_use, 'tzinfo', None)})")
                             async_result = send_shift_reminder_task.apply_async(
                                 args=[reminder.id],
-                                eta=eta_to_use
+                                eta=reminder.reminder_time
                             )
                             
                             # Guardar el task ID para trazabilidad
