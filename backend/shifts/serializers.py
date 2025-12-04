@@ -995,10 +995,13 @@ class ShiftChangeRequestReviewSerializer(serializers.Serializer):
                     # Mover turnos a fechas temporales
                     temp_date = datetime(9999, 12, 31).date()
                     logger.info(f"📦 Moviendo turnos a fecha temporal: {temp_date}")
-                
+                    # Suprimir notificaciones para los saves intermedios
+                    original_shift._suppress_notifications = True
+                    proposed_shift._suppress_notifications = True
+
                     original_shift.date = temp_date
                     original_shift.save(update_fields=['date'])
-                
+
                     proposed_shift.date = temp_date
                     proposed_shift.save(update_fields=['date'])
                 
@@ -1019,6 +1022,12 @@ class ShiftChangeRequestReviewSerializer(serializers.Serializer):
                     original_shift.is_locked = True
                     original_shift.lock_reason = f"Intercambiado con {proposed_employee.user.first_name} {proposed_employee.user.last_name}"
                     original_shift.locked_at = timezone.now()
+                    # Reactivar notificaciones antes del guardado final
+                    if hasattr(original_shift, '_suppress_notifications'):
+                        try:
+                            delattr(original_shift, '_suppress_notifications')
+                        except Exception:
+                            pass
                     original_shift.save()
                 
                     logger.info(f"✅ Turno 1 actualizado y bloqueado: Employee={original_employee.id}")
@@ -1035,6 +1044,12 @@ class ShiftChangeRequestReviewSerializer(serializers.Serializer):
                     proposed_shift.is_locked = True
                     proposed_shift.lock_reason = f"Intercambiado con {original_employee.user.first_name} {original_employee.user.last_name}"
                     proposed_shift.locked_at = timezone.now()
+                    # Reactivar notificaciones antes del guardado final
+                    if hasattr(proposed_shift, '_suppress_notifications'):
+                        try:
+                            delattr(proposed_shift, '_suppress_notifications')
+                        except Exception:
+                            pass
                     proposed_shift.save()
                 
                     logger.info(f"✅ Turno 2 actualizado y bloqueado: Employee={proposed_employee.id}")

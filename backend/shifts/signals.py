@@ -64,6 +64,16 @@ def manage_shift_notifications_and_reminders(sender, instance, created, **kwargs
     
     try:
         user = instance.employee.user
+
+        # Si el caller marcó para suprimir notificaciones temporales, salir
+        if getattr(instance, '_suppress_notifications', False):
+            logger.info(f"🔕 Notificaciones suprimidas para turno {instance.id} (flag _suppress_notifications)")
+            # Limpiar el flag para no afectar futuros saves en la misma instancia
+            try:
+                delattr(instance, '_suppress_notifications')
+            except Exception:
+                pass
+            return
         
         if created:
             # ========================================
