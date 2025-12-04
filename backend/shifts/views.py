@@ -566,16 +566,9 @@ class ShiftDeleteAPIView(APIView):
             return Response({'error': 'Turno no encontrado'}, status=status.HTTP_404_NOT_FOUND)
 
         try:
-            # ✅ CORRECCIÓN CRÍTICA: Enviar notificación ANTES de eliminar
-            if shift.employee and shift.employee.user:
-                user = shift.employee.user
-                logger.info(f"🗑️ [ShiftDeleteAPIView] Enviando notificación de eliminación para {user.email}")
-                
-                # ✅ Enviar notificación manualmente ANTES de eliminar
-                from notificacion.services import notification_service
-                notification_service.notify_shift_cancelled(shift, user)
-            
-            # ✅ Ahora eliminar el turno (las notificaciones se eliminarán en cascada)
+            # ✅ Eliminar el turno. La señal `post_delete` se encargará
+            # de notificar y cancelar recordatorios para evitar duplicados.
+            logger.info(f"🗑️ [ShiftDeleteAPIView] Eliminando turno {pk} (la señal post_delete notificará al usuario)")
             shift.delete()
             
             logger.info(f"✅ Turno {pk} eliminado exitosamente")

@@ -42,7 +42,25 @@ class NotificationService:
         try:
             # Obtener preferencias del usuario
             preferences, _ = NotificationPreference.objects.get_or_create(user=user)
-            
+
+            # Evitar duplicados cercanos: si ya existe una notificación del mismo tipo
+            # ligada al mismo turno creada hace menos de X segundos, no volver a enviar.
+            try:
+                recent_threshold_seconds = 10
+                if related_shift is not None:
+                    recent = Notification.objects.filter(
+                        user=user,
+                        type=notification_type,
+                        related_shift=related_shift
+                    ).order_by('-created_at').first()
+                    if recent:
+                        delta = timezone.now() - recent.created_at
+                        if delta.total_seconds() < recent_threshold_seconds:
+                            logger.info(f"⚠️ Saltando notificación duplicada ({notification_type}) para {user.email} y turno {related_shift.id} (creada hace {int(delta.total_seconds())}s)")
+                            return recent
+            except Exception as e:
+                logger.debug(f"⚠️ No se pudo verificar duplicados: {e}")
+
             # Verificar preferencias de panel
             panel_enabled = self._check_panel_preference(preferences, notification_type)
             
