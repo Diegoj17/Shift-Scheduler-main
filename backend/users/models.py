@@ -109,6 +109,49 @@ def _sync_permissions_by_role(sender, instance, created, **kwargs):
         # No queremos que un error en esta lógica impida operaciones sobre usuario
         pass
 
+
+# Señal: Crear Employee automáticamente cuando corresponda
+@receiver(post_save, sender=User)
+def _create_employee_for_user(sender, instance, created, **kwargs):
+    """Crea un `shifts.Employee` cuando se crea un `User` con rol EMPLEADO
+
+    - Si el usuario se crea y su rol es EMPLEADO -> crea Employee si no existe.
+    - Si el rol cambia a EMPLEADO -> crea Employee si no existe.
+
+    Usamos import local para evitar dependencias circulares.
+    """
+    try:
+        # Import local para evitar ciclos
+        from shifts.models import Employee
+
+        # Si el usuario ahora ES empleado -> crear si hace falta
+        if instance.role == User.Role.EMPLEADO:
+            # Evitar crear duplicados si ya exista
+            try:
+                Employee.objects.get(user=instance)
+                return
+            except Employee.DoesNotExist:
+                # Crear Employee con posición tomada de `puesto` o valor por defecto
+                position = getattr(instance, 'puesto', None) or 'Sin puesto'
+                Employee.objects.create(user=instance, position=position)
+                return
+
+        # Si el usuario dejó de ser EMPLEADO (tenía rol previo EMPLEADO), marcar su Employee como inactivo
+        prev_role = getattr(instance, '_previous_role', None)
+        try:
+            if prev_role == User.Role.EMPLEADO and instance.role != User.Role.EMPLEADO:
+                emp = Employee.objects.filter(user=instance).first()
+                if emp and emp.is_active:
+                    emp.is_active = False
+                    emp.save(update_fields=['is_active'])
+        except Exception:
+            # No romper el flujo de guardado de User si algo falla
+            pass
+
+    except Exception:
+        # No queremos que un fallo en la creación del Employee rompa la creación/actualización de User
+        pass
+
     
 def _desired_permissions_for_role(role):
     return ALLOWED_PERMS_LIST if role in (User.Role.ADMIN, User.Role.GERENTE) else []
