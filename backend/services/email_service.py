@@ -1,56 +1,28 @@
 import os
 import logging
-from sendgrid import SendGridAPIClient
-from sendgrid.helpers.mail import Mail, To, From, Category
-from python_http_client.exceptions import HTTPError
-import secrets
-import time
+from django.conf import settings
+from django.core.mail import EmailMultiAlternatives
 
 logger = logging.getLogger(__name__)
 
 class EmailService:
     def __init__(self):
-        """
-        ✅ CORREGIDO: Inicializa sin validación bloqueante
-        La validación de la API key se hace en el primer envío real
-        """
-        # Soportar varios nombres de variable de entorno
-        api_key = os.environ.get('SENDGRID_API_KEY') or os.environ.get('SENDGRID_KEY')
-        if not api_key:
-            logger.error("❌ SENDGRID_API_KEY no encontrada en variables de entorno")
-            raise ValueError("SENDGRID_API_KEY no configurada")
-
-        self.sg = SendGridAPIClient(api_key)
-        
-        # Email remitente
         self.from_email = (
             os.environ.get('EMAIL_FROM') or 
             os.environ.get('DEFAULT_FROM_EMAIL') or 
-            'soporteshiftscheduler1@gmail.com'
+            getattr(settings, "DEFAULT_FROM_EMAIL", "soporteshiftscheduler1@gmail.com")
         )
-        
         self.frontend_url = os.environ.get('FRONTEND_URL', 'https://shiftscheduler1.vercel.app')
-        
-        # ✅ CAMBIO CRÍTICO: NO validar la API key en __init__
-        # La validación se hará en el primer envío real
-        logger.info(f"✅ EmailService inicializado")
-        logger.info(f"   - From: {self.from_email}")
-        logger.info(f"   - Frontend: {self.frontend_url}")
-        logger.info(f"   - API Key: {'*' * 20}{api_key[-8:] if len(api_key) > 8 else '****'}")
-    
+        logger.info(f"✅ EmailService SMTP inicializado (from: {self.from_email})")
+
     def send_password_reset_email(self, to_email, reset_token, user_name=None, uid=None):
-        """
-        Envía email de recuperación de contraseña
-        """
         try:
-            # Construir URL de reseteo
             base = os.environ.get('PASSWORD_RESET_CONFIRM_FRONTEND_URL') or self.frontend_url
             if uid:
                 reset_url = f"{base}?uid={uid}&token={reset_token}"
             else:
                 reset_url = f"{base}/reset-password/confirm?token={reset_token}"
-            
-            # HTML content
+
             html_content = f"""
             <!DOCTYPE html>
             <html>
@@ -94,8 +66,7 @@ class EmailService:
             </body>
             </html>
             """
-            
-            # Plain text content
+
             plain_content = f"""
 Recuperación de Contraseña - Shift Scheduler
 
@@ -112,27 +83,22 @@ Si no solicitaste este cambio, ignora este email.
 ---
 Shift Scheduler
             """
-            
-            # Crear mensaje
-            message = Mail(
-                from_email=From(self.from_email, "Shift Scheduler"),
-                to_emails=To(to_email),
-                subject="Restablecimiento de contraseña - Shift Scheduler",
-                html_content=html_content,
-                plain_text_content=plain_content
-            )
-            
-            # Enviar con reintentos
-            return self._send_with_retry(message, email_type="password_reset")
 
+            msg = EmailMultiAlternatives(
+                subject="Restablecimiento de contraseña - Shift Scheduler",
+                body=plain_content,
+                from_email=self.from_email,
+                to=[to_email]
+            )
+            msg.attach_alternative(html_content, "text/html")
+            msg.send()
+            logger.info(f"✅ Email de recuperación enviado a {to_email}")
+            return True
         except Exception as e:
             logger.error(f"❌ Error enviando email de recuperación a {to_email}: {str(e)}", exc_info=True)
             return False
-    
+
     def send_password_updated_email(self, to_email, user_name=None):
-        """
-        Envía email confirmando actualización de contraseña
-        """
         try:
             html_content = f"""
             <!DOCTYPE html>
@@ -164,7 +130,7 @@ Shift Scheduler
             </body>
             </html>
             """
-            
+
             plain_content = f"""
 Contraseña Actualizada - Shift Scheduler
 
@@ -177,65 +143,46 @@ Tu contraseña ha sido actualizada correctamente.
 ---
 Shift Scheduler
             """
-            
-            message = Mail(
-                from_email=From(self.from_email, "Shift Scheduler"),
-                to_emails=To(to_email),
+
+            msg = EmailMultiAlternatives(
                 subject="Contraseña actualizada - Shift Scheduler",
-                html_content=html_content,
-                plain_text_content=plain_content
+                body=plain_content,
+                from_email=self.from_email,
+                to=[to_email]
             )
-            
-            return self._send_with_retry(message, email_type="password_updated")
-            
+            msg.attach_alternative(html_content, "text/html")
+            msg.send()
+            logger.info(f"✅ Email de confirmación enviado a {to_email}")
+            return True
         except Exception as e:
             logger.error(f"❌ Error enviando confirmación a {to_email}: {str(e)}", exc_info=True)
             return False
 
     def send_notification_email(self, to_email, subject, plain_text_content, html_content=None):
-        """
-        ✅ Envía email genérico para notificaciones del sistema
-        Usado por el sistema de recordatorios
-        """
         try:
-            logger.info(f"📧 Preparando notificación para {to_email}")
-            logger.info(f"   - Subject: {subject}")
-            
             if html_content is None:
                 html_content = f"<pre>{plain_text_content}</pre>"
 
-            message = Mail(
-                from_email=From(self.from_email, "Shift Scheduler"),
-                to_emails=To(to_email),
+            msg = EmailMultiAlternatives(
                 subject=subject,
-                html_content=html_content,
-                plain_text_content=plain_text_content
+                body=plain_text_content,
+                from_email=self.from_email,
+                to=[to_email]
             )
-
-            result = self._send_with_retry(message, email_type="notification")
-            
-            if result:
-                logger.info(f"✅ Notificación enviada exitosamente a {to_email}")
-            else:
-                logger.error(f"❌ Falló el envío de notificación a {to_email}")
-            
-            return result
-            
+            msg.attach_alternative(html_content, "text/html")
+            msg.send()
+            logger.info(f"✅ Notificación enviada a {to_email}")
+            return True
         except Exception as e:
             logger.error(f"❌ Error enviando notificación a {to_email}: {str(e)}", exc_info=True)
             return False
 
     def send_shift_reminder_email(self, to_email, user_name, shift_date, start_time, end_time, shift_details=None):
-        """
-        Envía email de recordatorio de turno
-        """
         try:
-            # Formatear fecha y hora
             formatted_date = shift_date.strftime("%d/%m/%Y")
             formatted_start = start_time.strftime("%H:%M")
             formatted_end = end_time.strftime("%H:%M")
 
-            # Bloque de detalles opcional
             if shift_details:
                 details_block = f"""
                         <div style="display: flex; align-items: center; margin-bottom: 10px;">
@@ -308,159 +255,25 @@ Shift Scheduler
             ])
             plain_content = "\n".join(plain_content_lines)
 
-            message = Mail(
-                from_email=From(self.from_email, "Shift Scheduler"),
-                to_emails=To(to_email),
+            msg = EmailMultiAlternatives(
                 subject=f"⏰ Recordatorio de turno para el {formatted_date}",
-                html_content=html_content,
-                plain_text_content=plain_content
+                body=plain_content,
+                from_email=self.from_email,
+                to=[to_email]
             )
-
-            return self._send_with_retry(message, email_type="shift_reminder")
-
+            msg.attach_alternative(html_content, "text/html")
+            msg.send()
+            logger.info(f"✅ Recordatorio de turno enviado a {to_email}")
+            return True
         except Exception as e:
             logger.error(f"❌ Error enviando recordatorio a {to_email}: {str(e)}", exc_info=True)
             return False
 
-    def _send_with_retry(self, message, max_retries: int = 3, email_type: str = "generic"):
-        """
-        ✅ MEJORADO: Envía email con reintentos y logging detallado
-        """
-        for attempt in range(1, max_retries + 1):
-            try:
-                logger.info(f"📤 [{email_type}] Intento {attempt}/{max_retries} - Enviando a {message.to[0]['email'] if message.to else 'unknown'}")
-                
-                response = self.sg.send(message)
-                status = getattr(response, 'status_code', None)
-                body = getattr(response, 'body', None)
-
-                # Normalizar body
-                try:
-                    if isinstance(body, (bytes, bytearray)):
-                        body_text = body.decode('utf-8', errors='replace')
-                    else:
-                        body_text = str(body)
-                except Exception:
-                    body_text = repr(body)
-
-                logger.info(f"📨 SendGrid response: status={status}")
-                
-                # Debug detallado si está habilitado
-                if os.getenv('SENDGRID_DEBUG_BODY', 'False') == 'True' or logger.isEnabledFor(logging.DEBUG):
-                    logger.debug(f"Response body: {body_text}")
-
-                # ✅ 202 = Email aceptado para envío
-                if status == 202:
-                    logger.info(f"✅ Email enviado exitosamente (status 202)")
-                    return True
-
-                # ❌ Errores de cliente (4xx) NO reintentar, excepto 429
-                if status and 400 <= status < 500 and status != 429:
-                    logger.error(f"❌ Error cliente SendGrid: status={status}")
-                    logger.error(f"   Body: {body_text}")
-                    return False
-
-                # ⚠️ Errores de servidor (5xx) o inesperados - reintentar
-                logger.warning(f"⚠️ Respuesta inesperada: status={status}, reintentando...")
-
-            except HTTPError as he:
-                status = getattr(he, 'status_code', None)
-                body = getattr(he, 'body', getattr(he, 'args', str(he)))
-                
-                try:
-                    if isinstance(body, (bytes, bytearray)):
-                        body_text = body.decode('utf-8', errors='replace')
-                    else:
-                        body_text = str(body)
-                except Exception:
-                    body_text = repr(body)
-
-                logger.error(f"❌ HTTPError: status={status}")
-                logger.error(f"   Body: {body_text}")
-                
-                # Debug detallado
-                if os.getenv('SENDGRID_DEBUG_BODY', 'False') == 'True' or logger.isEnabledFor(logging.DEBUG):
-                    logger.debug(f"HTTPError completo: {he}")
-
-                # NO reintentar errores de cliente
-                if status and 400 <= status < 500 and status != 429:
-                    return False
-                    
-            except Exception as exc:
-                logger.exception(f"❌ Excepción inesperada en intento {attempt}: {exc}")
-
-            # ⏳ Esperar antes del siguiente intento
-            if attempt < max_retries:
-                backoff = min(2 ** attempt, 60)
-                logger.info(f"⏳ Esperando {backoff}s antes de reintentar...")
-                time.sleep(backoff)
-
-        logger.error(f"❌ Agotados {max_retries} reintentos enviando email")
-        return False
-
-
-# ============================================
-# INSTANCIA GLOBAL CON INICIALIZACIÓN SEGURA
-# ============================================
-
+# Instancia global
 email_service = None
 
 def get_email_service():
-    """
-    ✅ MEJORADO: Inicializa email_service con manejo robusto de errores
-    """
     global email_service
-    
     if email_service is None:
-        try:
-            email_service = EmailService()
-            logger.info("✅ EmailService inicializado correctamente")
-        except ValueError as ve:
-            # Falta la API key
-            logger.error(f"❌ EmailService no disponible: {ve}")
-            logger.error("   Configura SENDGRID_API_KEY en las variables de entorno")
-            email_service = _get_dummy_email_service()
-        except Exception as e:
-            # Otros errores (red, permisos, etc.)
-            logger.warning(f"⚠️ No se pudo inicializar EmailService: {e}")
-            logger.warning("   Usando DummyEmailService como fallback")
-            email_service = _get_dummy_email_service()
-    
+        email_service = EmailService()
     return email_service
-
-
-def _get_dummy_email_service():
-    """
-    ✅ Servicio dummy para desarrollo/testing sin SendGrid
-    """
-    class DummyEmailService:
-        def __init__(self):
-            logger.warning("⚠️ DummyEmailService activo - Los emails NO se enviarán realmente")
-        
-        def send_password_reset_email(self, to_email, reset_token, user_name=None, uid=None):
-            logger.info(f"[DUMMY] Recuperación de contraseña para {to_email}")
-            logger.info(f"        Token: {reset_token}")
-            return False
-
-        def send_password_updated_email(self, to_email, user_name=None):
-            logger.info(f"[DUMMY] Confirmación de contraseña para {to_email}")
-            return False
-
-        def send_notification_email(self, to_email, subject, plain_text_content, html_content=None):
-            logger.info(f"[DUMMY] Notificación para {to_email}")
-            logger.info(f"        Subject: {subject}")
-            return False
-
-        def send_shift_reminder_email(self, to_email, user_name, shift_date, start_time, end_time, shift_details=None):
-            logger.info(f"[DUMMY] Recordatorio de turno para {to_email}")
-            logger.info(f"        Fecha: {shift_date} {start_time}")
-            return False
-
-    return DummyEmailService()
-
-
-def generate_reset_token(length: int = 32) -> str:
-    """
-    Genera token seguro para reseteo de contraseña
-    """
-    return secrets.token_urlsafe(length)
