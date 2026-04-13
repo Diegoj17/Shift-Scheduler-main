@@ -1,9 +1,14 @@
 import os
 import logging
+import secrets
 from django.conf import settings
 from django.core.mail import EmailMultiAlternatives
 
 logger = logging.getLogger(__name__)
+
+def generate_reset_token(length=32):
+    """Genera un token seguro para restablecimiento de contraseña."""
+    return secrets.token_urlsafe(length)
 
 class EmailService:
     def __init__(self):
