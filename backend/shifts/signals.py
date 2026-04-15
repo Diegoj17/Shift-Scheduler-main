@@ -133,6 +133,10 @@ def handle_shift_deletion(sender, instance, **kwargs):
     - Limpia registros de ShiftReminder
     """
     try:
+        if getattr(instance, '_suppress_notifications', False):
+            logger.info(f"🔕 Notificaciones suprimidas para eliminación de turno {instance.id}")
+            return
+
         # ✅ Verificar que tengamos referencia al usuario
         if hasattr(instance, 'employee') and instance.employee and hasattr(instance.employee, 'user'):
             user = instance.employee.user

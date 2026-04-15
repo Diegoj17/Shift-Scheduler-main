@@ -264,7 +264,6 @@ class ShiftTypeCreateAPIView(APIView):
                 return Response({'detail': str(exc), 'traceback': tb}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
             return Response({'detail': 'Internal server error while creating ShiftType'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
-
 @method_decorator(csrf_exempt, name='dispatch')
 class ShiftCreateAPIView(APIView):
     """API para crear turnos desde el frontend (JSON).
@@ -551,63 +550,105 @@ class ShiftUpdateAPIView(APIView):
             }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
+from services.email_service import get_email_service
+
 @method_decorator(csrf_exempt, name='dispatch')
 class ShiftDeleteAPIView(APIView):
-    """API para eliminar un turno por pk."""
+    """API para eliminar uno o varios turnos."""
     authentication_classes = [JWTAuthentication]
     permission_classes = [permissions.IsAuthenticated]
-    
 
-    def delete(self, request, pk, *args, **kwargs):
+    def delete(self, request, pk=None, *args, **kwargs):
         logger = logging.getLogger(__name__)
-        try:
-            shift = Shift.objects.get(pk=pk)
-        except Shift.DoesNotExist:
-            return Response({'error': 'Turno no encontrado'}, status=status.HTTP_404_NOT_FOUND)
+        email_service = get_email_service()
 
-        try:
-            # ✅ Eliminar el turno. La señal `post_delete` se encargará
-            # de notificar y cancelar recordatorios para evitar duplicados.
-            logger.info(f"🗑️ [ShiftDeleteAPIView] Eliminando turno {pk} (la señal post_delete notificará al usuario)")
+        # 1. Soportar eliminación múltiple por body: {"ids": [1,2,3]}
+        ids = request.data.get('ids') if hasattr(request, 'data') else None
+        if ids and isinstance(ids, list):
+            # Eliminar múltiples turnos
+            from collections import defaultdict
+            user_shifts = defaultdict(list)
+            shifts = Shift.objects.filter(id__in=ids).select_related('employee__user')
+            for shift in shifts:
+                user = shift.employee.user
+                user_shifts[user].append({
+                    'date': shift.date.strftime('%d/%m/%Y'),
+                    'start_time': shift.start_time.strftime('%H:%M'),
+                    'end_time': shift.end_time.strftime('%H:%M'),
+                })
+            deleted_count = 0
+            for shift in shifts:
+                # Evitar correo automático por señal; aquí se envía correo agrupado/manual.
+                shift._suppress_notifications = True
+                shift.delete()
+                deleted_count += 1
+            # Enviar correos agrupados
+            for user, shifts_list in user_shifts.items():
+                if not user.email:
+                    continue
+                if len(shifts_list) == 1:
+                    turno = shifts_list[0]
+                    subject = "Turno Cancelado - Shift Scheduler"
+                    plain_text_content = (
+                        f"Tu turno del {turno['date']} de {turno['start_time']} a {turno['end_time']} ha sido cancelado."
+                    )
+                    email_service.send_notification_email(
+                        to_email=user.email,
+                        subject=subject,
+                        plain_text_content=plain_text_content
+                    )
+                elif len(shifts_list) > 1:
+                    email_service.send_shifts_cancelled_email(
+                        to_email=user.email,
+                        user_name=user.first_name,
+                        shifts=shifts_list
+                    )
+            return Response({'deleted': deleted_count}, status=status.HTTP_200_OK)
+
+        # 2. Eliminar turno único por pk (como antes)
+        if pk is not None:
+            try:
+                shift = Shift.objects.get(pk=pk)
+            except Shift.DoesNotExist:
+                return Response({'error': 'Turno no encontrado'}, status=status.HTTP_404_NOT_FOUND)
+            user = shift.employee.user
+            turno = {
+                'date': shift.date.strftime('%d/%m/%Y'),
+                'start_time': shift.start_time.strftime('%H:%M'),
+                'end_time': shift.end_time.strftime('%H:%M'),
+            }
+            # Evitar correo automático por señal; aquí se envía correo manual.
+            shift._suppress_notifications = True
             shift.delete()
-            
-            logger.info(f"✅ Turno {pk} eliminado exitosamente")
+            subject = "Turno Cancelado - Shift Scheduler"
+            plain_text_content = (
+                f"Tu turno del {turno['date']} de {turno['start_time']} a {turno['end_time']} ha sido cancelado."
+            )
+            email_service.send_notification_email(
+                to_email=user.email,
+                subject=subject,
+                plain_text_content=plain_text_content
+            )
             return Response({'message': 'Turno eliminado exitosamente'}, status=status.HTTP_204_NO_CONTENT)
-            
-        except Exception as exc:
-            logging.exception("Unhandled exception deleting Shift via API")
-            if getattr(settings, 'DEBUG', False):
-                return Response({'detail': str(exc), 'traceback': traceback.format_exc()}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
-            return Response({'detail': 'Error al eliminar turno'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+        return Response({'error': 'No se especificó turno(s) a eliminar'}, status=status.HTTP_400_BAD_REQUEST)
 
 
 @method_decorator(csrf_exempt, name='dispatch')
 class ShiftDuplicateAPIView(APIView):
     """
     API para duplicar turnos desde un patrón origen hacia un rango destino.
-    
-    ✅ CORREGIDO: Duplica correctamente los turnos del patrón origen a cada día destino
-    
-    Espera JSON con:
-    - start_date: Inicio del patrón origen (YYYY-MM-DD)
-    - end_date: Fin del patrón origen (YYYY-MM-DD)
-    - target_start_date: Inicio del período destino (YYYY-MM-DD)
-    - target_end_date: Fin del período destino (YYYY-MM-DD)
-    
-    Ejemplo:
-    - Origen: 13 nov (5 turnos)
-    - Destino: 14-19 nov (6 días)
-    - Resultado: Los 5 turnos se copian a cada uno de los 6 días = 30 turnos
     """
     authentication_classes = [JWTAuthentication]
     permission_classes = [permissions.IsAuthenticated]
 
     def post(self, request, *args, **kwargs):
+        from collections import defaultdict
+
         data = request.data
         logger = logging.getLogger(__name__)
-        
+
         try:
-            # ✅ Obtener fechas con los nombres correctos
             start_date_str = data.get('start_date')
             end_date_str = data.get('end_date')
             target_start_date_str = data.get('target_start_date')
@@ -620,19 +661,13 @@ class ShiftDuplicateAPIView(APIView):
                     'error': 'start_date, end_date y target_start_date son requeridos'
                 }, status=status.HTTP_400_BAD_REQUEST)
 
-            # Parsear fechas
             source_start = datetime.fromisoformat(start_date_str).date()
             source_end = datetime.fromisoformat(end_date_str).date()
             target_start = datetime.fromisoformat(target_start_date_str).date()
-            
-            # ✅ Si no hay target_end_date, usar solo target_start_date
             if target_end_date_str:
                 target_end = datetime.fromisoformat(target_end_date_str).date()
             else:
                 target_end = target_start
-
-            logger.info(f"🔄 [Duplicate] Origen: {source_start} - {source_end}")
-            logger.info(f"🔄 [Duplicate] Destino: {target_start} - {target_end}")
 
         except Exception as exc:
             logger.exception("❌ Error parseando fechas")
@@ -640,7 +675,6 @@ class ShiftDuplicateAPIView(APIView):
                 'error': 'Formato de fecha inválido, usar YYYY-MM-DD'
             }, status=status.HTTP_400_BAD_REQUEST)
 
-        # ✅ Obtener TODOS los turnos del patrón origen
         source_shifts = Shift.objects.filter(
             date__range=[source_start, source_end]
         ).select_related('employee', 'shift_type')
@@ -652,58 +686,52 @@ class ShiftDuplicateAPIView(APIView):
                 'conflicts': 0
             }, status=status.HTTP_400_BAD_REQUEST)
 
-        logger.info(f"📋 Turnos en patrón origen: {source_shifts.count()}")
-
-        # ✅ Calcular días del patrón origen y destino
         source_days = (source_end - source_start).days + 1
         target_days = (target_end - target_start).days + 1
-        
-        logger.info(f"📅 Patrón: {source_days} día(s), Destino: {target_days} día(s)")
 
         created_count = 0
         conflict_count = 0
         conflicts = []
+        created_shifts_by_user = defaultdict(list)
 
         with transaction.atomic():
-            # ✅ NUEVA LÓGICA: Para cada día destino
             for day_offset in range(target_days):
                 target_date = target_start + timedelta(days=day_offset)
-                
-                logger.info(f"📌 Procesando día destino: {target_date}")
-                
-                # ✅ CRÍTICO: Si el patrón origen es UN SOLO DÍA, duplicar todos sus turnos a CADA día destino
                 if source_days == 1:
                     shifts_to_duplicate = source_shifts
-                    logger.info(f"  → Duplicando {shifts_to_duplicate.count()} turnos del día origen único")
                 else:
-                    # Si el patrón es múltiples días, usar patrón cíclico
                     pattern_day_index = day_offset % source_days
                     pattern_date = source_start + timedelta(days=pattern_day_index)
                     shifts_to_duplicate = source_shifts.filter(date=pattern_date)
-                    logger.info(f"  → Usando patrón del día {pattern_date} ({shifts_to_duplicate.count()} turnos)")
-                
-                # Duplicar cada turno del día correspondiente
+
                 for source_shift in shifts_to_duplicate:
-                    # Verificar conflictos
                     conflicting_shift = Shift.objects.filter(
                         employee=source_shift.employee,
                         date=target_date,
                         start_time__lt=source_shift.end_time,
                         end_time__gt=source_shift.start_time
                     ).exists()
-                    
+
                     if not conflicting_shift:
-                        # Crear nuevo turno
-                        new_shift = Shift.objects.create(
+                        # Crear con supresión de señal para evitar correo automático por turno.
+                        new_shift = Shift(
                             date=target_date,
                             start_time=source_shift.start_time,
                             end_time=source_shift.end_time,
                             employee=source_shift.employee,
                             shift_type=source_shift.shift_type,
-                            notes=source_shift.notes
+                            notes=source_shift.notes,
                         )
+                        new_shift._suppress_notifications = True
+                        new_shift.save()
                         created_count += 1
-                        logger.info(f"    ✅ Turno creado: ID={new_shift.id}, Empleado={source_shift.employee.id}, Fecha={target_date}")
+                        # Guardar para correo
+                        user = source_shift.employee.user
+                        created_shifts_by_user[user].append({
+                            'date': target_date.strftime('%d/%m/%Y'),
+                            'start_time': source_shift.start_time.strftime('%H:%M'),
+                            'end_time': source_shift.end_time.strftime('%H:%M'),
+                        })
                     else:
                         conflict_count += 1
                         conflicts.append({
@@ -712,7 +740,33 @@ class ShiftDuplicateAPIView(APIView):
                             'date': target_date.isoformat(),
                             'time': f"{source_shift.start_time}-{source_shift.end_time}",
                         })
-                        logger.warning(f"    ⚠️ Conflicto: Empleado={source_shift.employee.id} en {target_date}")
+
+        # --- ENVÍO DE CORREO POR USUARIO ---
+        try:
+            email_service = get_email_service()
+            for user, shifts_list in created_shifts_by_user.items():
+                if not user.email:
+                    continue
+                if len(shifts_list) == 1:
+                    turno = shifts_list[0]
+                    subject = "Turno creado - Shift Scheduler"
+                    plain_text_content = (
+                        f"Tu turno del {turno['date']} de {turno['start_time']} a {turno['end_time']} ha sido creado."
+                    )
+                    email_service.send_notification_email(
+                        to_email=user.email,
+                        subject=subject,
+                        plain_text_content=plain_text_content
+                    )
+                elif len(shifts_list) > 1:
+                    email_service.send_shifts_created_email(
+                        to_email=user.email,
+                        user_name=user.first_name,
+                        shifts=shifts_list
+                    )
+        except Exception as e:
+            logger.exception("❌ Error enviando correos de duplicación de turnos")
+        # --- FIN ENVÍO DE CORREO POR USUARIO ---
 
         result = {
             'created': created_count,
@@ -721,8 +775,6 @@ class ShiftDuplicateAPIView(APIView):
             'pattern_days': source_days,
             'target_days': target_days,
         }
-
-        logger.info(f"✅ Duplicación completada: {created_count} turnos creados, {conflict_count} conflictos")
 
         status_code = status.HTTP_201_CREATED if conflict_count == 0 else status.HTTP_207_MULTI_STATUS
         return Response(result, status=status_code)
