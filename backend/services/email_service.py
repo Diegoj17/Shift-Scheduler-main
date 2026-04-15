@@ -350,7 +350,6 @@ Shift Scheduler
                                 Ver Mi Calendario
                             </a>
                         </div>
-                        <p>Puedes gestionar tus preferencias de notificación desde tu perfil.</p>
                     </div>
                     <div style="padding:20px;text-align:center;font-size:12px;color:#666;background:#f8f9fa;">
                         <p>© 2025 Shift Scheduler - Sistema de Gestión de Turnos</p>
@@ -370,8 +369,6 @@ Hola {user_name},
 
 Los siguientes turnos han sido cancelados:
 {shifts_text}
-
-Puedes gestionar tus preferencias de notificación desde tu perfil.
 
 ---
 Shift Scheduler
@@ -394,50 +391,80 @@ Shift Scheduler
         shifts: lista de dicts con 'date', 'start_time', 'end_time'
         """
         try:
-            # Construir lista en HTML
-            shifts_html = "".join([
-                f"<li><strong>{s['date']}</strong> de {s['start_time']} a {s['end_time']}</li>"
+            total_shifts = len(shifts)
+            shifts_rows = "".join([
+                f"""
+                <tr>
+                    <td style="padding:12px 14px;border-bottom:1px solid #f3e7b0;">{s['date']}</td>
+                    <td style="padding:12px 14px;border-bottom:1px solid #f3e7b0;">{s['start_time']}</td>
+                    <td style="padding:12px 14px;border-bottom:1px solid #f3e7b0;">{s['end_time']}</td>
+                </tr>
+                """
                 for s in shifts
             ])
+
             html_content = f"""
             <html>
-            <body>
-                <div style="max-width:600px;margin:0 auto;background:#fff;border-radius:8px;overflow:hidden;">
-                    <div style="background:#28a745;color:white;padding:30px 20px;text-align:center;">
-                        <h1 style="margin:0;font-size:24px;">Shift Scheduler</h1>
-                        <div style="font-size:18px;">Turnos Creados</div>
+            <body style="margin:0;padding:0;background:#fff8e1;font-family:Arial,Helvetica,sans-serif;">
+                <div style="max-width:640px;margin:28px auto;background:#ffffff;border:1px solid #ffe08a;border-radius:16px;overflow:hidden;box-shadow:0 10px 30px rgba(173, 132, 0, 0.12);">
+                    <div style="background:linear-gradient(135deg,#f4b400,#f59e0b);color:#1f1f1f;padding:34px 28px;text-align:center;">
+                        <div style="display:inline-block;background:rgba(255,255,255,0.28);color:#1f1f1f;padding:6px 12px;border-radius:999px;font-size:12px;font-weight:700;letter-spacing:.4px;text-transform:uppercase;margin-bottom:14px;">
+                            Duplicación de turnos
+                        </div>
+                        <h1 style="margin:0;font-size:28px;line-height:1.2;">Shift Scheduler</h1>
+                        <div style="margin-top:10px;font-size:18px;font-weight:700;">Turnos duplicados correctamente</div>
                     </div>
-                    <div style="padding:30px 20px;">
-                        <h2>Hola {user_name},</h2>
-                        <p>Se han creado los siguientes turnos:</p>
-                        <ul style="font-size:16px;">{shifts_html}</ul>
-                        <div style="text-align:center;margin:30px 0;">
-                            <a href="{self.frontend_url}/calendar" style="display:inline-block;padding:14px 28px;background:#28a745;color:white;text-decoration:none;border-radius:5px;font-weight:bold;">
-                                Ver Mi Calendario
+
+                    <div style="padding:28px;">
+                        <p style="margin:0 0 16px;font-size:18px;color:#2f2f2f;font-weight:700;">Hola {user_name},</p>
+                        <p style="margin:0 0 22px;color:#555;font-size:15px;line-height:1.6;">
+                            Se duplicaron <strong>{total_shifts}</strong> turnos y quedaron programados en tu calendario.
+                        </p>
+
+                        <div style="background:#fffdf4;border:1px solid #f5d36b;border-radius:14px;overflow:hidden;margin:18px 0 24px;">
+                            <div style="padding:14px 16px;background:#fff1c2;color:#6b4e00;font-weight:700;border-bottom:1px solid #f5d36b;">
+                                Detalles de los turnos duplicados
+                            </div>
+                            <table style="width:100%;border-collapse:collapse;font-size:14px;color:#2f2f2f;">
+                                <thead>
+                                    <tr style="background:#fff8dc;text-align:left;color:#6b4e00;">
+                                        <th style="padding:12px 14px;border-bottom:1px solid #f3e7b0;">Fecha</th>
+                                        <th style="padding:12px 14px;border-bottom:1px solid #f3e7b0;">Inicio</th>
+                                        <th style="padding:12px 14px;border-bottom:1px solid #f3e7b0;">Fin</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    {shifts_rows}
+                                </tbody>
+                            </table>
+                        </div>
+
+                        <div style="text-align:center;margin:28px 0 14px;">
+                            <a href="{self.frontend_url}/calendar" style="display:inline-block;padding:14px 26px;background:#d97706;color:#ffffff;text-decoration:none;border-radius:10px;font-weight:700;box-shadow:0 6px 14px rgba(217,119,6,0.22);">
+                                Ver mi calendario
                             </a>
                         </div>
-                        <p>Puedes gestionar tus preferencias de notificación desde tu perfil.</p>
+
                     </div>
-                    <div style="padding:20px;text-align:center;font-size:12px;color:#666;background:#f8f9fa;">
-                        <p>© 2025 Shift Scheduler - Sistema de Gestión de Turnos</p>
+
+                    <div style="padding:18px 24px;text-align:center;font-size:12px;color:#7a7a7a;background:#fffaf0;border-top:1px solid #f5e6ba;">
+                        © 2025 Shift Scheduler - Sistema de Gestión de Turnos
                     </div>
                 </div>
             </body>
             </html>
             """
-            # Plain text
+
             shifts_text = "\n".join([
                 f"- {s['date']} de {s['start_time']} a {s['end_time']}"
                 for s in shifts
             ])
-            plain_content = f"""Turnos Creados - Shift Scheduler
+            plain_content = f"""Turnos duplicados - Shift Scheduler
 
 Hola {user_name},
 
-Se han creado los siguientes turnos:
+Se duplicaron {total_shifts} turnos y quedaron programados en tu calendario:
 {shifts_text}
-
-Puedes gestionar tus preferencias de notificación desde tu perfil.
 
 ---
 Shift Scheduler
@@ -445,7 +472,7 @@ Shift Scheduler
             message = Mail(
                 from_email=From(self.from_email, "Shift Scheduler"),
                 to_emails=To(to_email),
-                subject="Turnos creados - Shift Scheduler",
+                subject="Turnos duplicados - Shift Scheduler",
                 html_content=html_content,
                 plain_text_content=plain_content
             )
