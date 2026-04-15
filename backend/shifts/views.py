@@ -586,21 +586,10 @@ class ShiftDeleteAPIView(APIView):
             for user, shifts_list in user_shifts.items():
                 if not user.email:
                     continue
-                if len(shifts_list) == 1:
-                    turno = shifts_list[0]
-                    subject = "Turno Cancelado - Shift Scheduler"
-                    plain_text_content = (
-                        f"Tu turno del {turno['date']} de {turno['start_time']} a {turno['end_time']} ha sido cancelado."
-                    )
-                    email_service.send_notification_email(
-                        to_email=user.email,
-                        subject=subject,
-                        plain_text_content=plain_text_content
-                    )
-                elif len(shifts_list) > 1:
+                if len(shifts_list) >= 1:
                     email_service.send_shifts_cancelled_email(
                         to_email=user.email,
-                        user_name=user.first_name,
+                        user_name=(user.first_name or user.get_full_name() or "Usuario"),
                         shifts=shifts_list
                     )
             return Response({'deleted': deleted_count}, status=status.HTTP_200_OK)
@@ -620,14 +609,10 @@ class ShiftDeleteAPIView(APIView):
             # Evitar correo automático por señal; aquí se envía correo manual.
             shift._suppress_notifications = True
             shift.delete()
-            subject = "Turno Cancelado - Shift Scheduler"
-            plain_text_content = (
-                f"Tu turno del {turno['date']} de {turno['start_time']} a {turno['end_time']} ha sido cancelado."
-            )
-            email_service.send_notification_email(
+            email_service.send_shifts_cancelled_email(
                 to_email=user.email,
-                subject=subject,
-                plain_text_content=plain_text_content
+                user_name=(user.first_name or user.get_full_name() or "Usuario"),
+                shifts=[turno]
             )
             return Response({'message': 'Turno eliminado exitosamente'}, status=status.HTTP_204_NO_CONTENT)
 
