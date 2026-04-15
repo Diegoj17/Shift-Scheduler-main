@@ -37,6 +37,24 @@ class EmailService:
         logger.info(f"   - From: {self.from_email}")
         logger.info(f"   - Frontend: {self.frontend_url}")
         logger.info(f"   - API Key: {'*' * 20}{api_key[-8:] if len(api_key) > 8 else '****'}")
+
+    def _format_time_12h(self, value):
+        """Convierte una hora a formato 12h con am/pm."""
+        if value is None:
+            return ""
+
+        if hasattr(value, 'strftime'):
+            return value.strftime("%I:%M %p").lstrip("0").lower()
+
+        text = str(value).strip()
+        for fmt in ("%H:%M:%S", "%H:%M", "%I:%M %p", "%I:%M%p"):
+            try:
+                parsed = time.strptime(text, fmt)
+                return time.strftime("%I:%M %p", parsed).lstrip("0").lower()
+            except Exception:
+                continue
+
+        return text.lower()
     
     def send_password_reset_email(self, to_email, reset_token, user_name=None, uid=None):
         """
@@ -232,8 +250,8 @@ Shift Scheduler
         try:
             # Formatear fecha y hora
             formatted_date = shift_date.strftime("%d/%m/%Y")
-            formatted_start = start_time.strftime("%H:%M")
-            formatted_end = end_time.strftime("%H:%M")
+            formatted_start = self._format_time_12h(start_time)
+            formatted_end = self._format_time_12h(end_time)
 
             # Bloque de detalles opcional
             if shift_details:
@@ -328,30 +346,54 @@ Shift Scheduler
         shifts: lista de dicts con 'date', 'start_time', 'end_time'
         """
         try:
+            login_url = os.environ.get('FRONTEND_LOGIN_URL', 'https://shiftscheduler1.vercel.app/login')
+
             # Construir lista en HTML
             shifts_html = "".join([
-                f"<li><strong>{s['date']}</strong> de {s['start_time']} a {s['end_time']}</li>"
+                f"""
+                <div style="padding:12px 14px;border-bottom:1px solid #f3d0d0;display:flex;justify-content:space-between;gap:12px;">
+                    <div><strong style="color:#7f1d1d;">{s['date']}</strong></div>
+                    <div style="color:#444;">{self._format_time_12h(s['start_time'])} - {self._format_time_12h(s['end_time'])}</div>
+                </div>
+                """
                 for s in shifts
             ])
             html_content = f"""
             <html>
-            <body>
-                <div style="max-width:600px;margin:0 auto;background:#fff;border-radius:8px;overflow:hidden;">
-                    <div style="background:#dc3545;color:white;padding:30px 20px;text-align:center;">
-                        <h1 style="margin:0;font-size:24px;">Shift Scheduler</h1>
-                        <div style="font-size:18px;">Turnos Cancelados</div>
+            <body style="margin:0;padding:0;background:#fff5f5;font-family:Arial,Helvetica,sans-serif;">
+                <div style="max-width:640px;margin:28px auto;background:#ffffff;border:1px solid #f2b8b5;border-radius:16px;overflow:hidden;box-shadow:0 10px 30px rgba(153, 27, 27, 0.12);">
+                    <div style="background:linear-gradient(135deg,#dc2626,#ef4444);color:white;padding:34px 28px;text-align:center;">
+                        <div style="display:inline-block;background:rgba(255,255,255,0.18);padding:6px 12px;border-radius:999px;font-size:12px;font-weight:700;letter-spacing:.4px;text-transform:uppercase;margin-bottom:14px;">
+                            Cancelación de turno
+                        </div>
+                        <h1 style="margin:0;font-size:28px;line-height:1.2;">Shift Scheduler</h1>
+                        <div style="margin-top:10px;font-size:18px;font-weight:700;">Tu turno fue cancelado</div>
                     </div>
-                    <div style="padding:30px 20px;">
-                        <h2>Hola {user_name},</h2>
-                        <p>Los siguientes turnos han sido cancelados:</p>
-                        <ul style="font-size:16px;">{shifts_html}</ul>
-                        <div style="text-align:center;margin:30px 0;">
-                            <a href="{self.frontend_url}/calendar" style="display:inline-block;padding:14px 28px;background:#dc3545;color:white;text-decoration:none;border-radius:5px;font-weight:bold;">
-                                Ver Mi Calendario
+                    <div style="padding:28px;">
+                        <p style="margin:0 0 16px;font-size:18px;color:#2f2f2f;font-weight:700;">Hola {user_name},</p>
+                        <p style="margin:0 0 22px;color:#555;font-size:15px;line-height:1.6;">
+                            Los siguientes turnos fueron cancelados. Inicia sesión para revisar tu calendario.
+                        </p>
+
+                        <div style="background:#fffafa;border:1px solid #f3c7c7;border-radius:14px;overflow:hidden;margin:18px 0 24px;">
+                            <div style="padding:14px 16px;background:#fee2e2;color:#7f1d1d;font-weight:700;border-bottom:1px solid #f3c7c7;">
+                                Turnos cancelados
+                            </div>
+                            <div style="font-size:14px;">
+                                {shifts_html}
+                            </div>
+                        </div>
+
+                        <div style="text-align:center;margin:28px 0 14px;">
+                            <a href="{login_url}" style="display:inline-block;padding:14px 26px;background:#dc2626;color:#ffffff;text-decoration:none;border-radius:10px;font-weight:700;box-shadow:0 6px 14px rgba(220,38,38,0.22);">
+                                Iniciar sesión y ver calendario
                             </a>
                         </div>
+                        <p style="margin:0;color:#6b7280;font-size:13px;line-height:1.6;text-align:center;">
+                            Si no esperabas este cambio, revisa tu cuenta al ingresar.
+                        </p>
                     </div>
-                    <div style="padding:20px;text-align:center;font-size:12px;color:#666;background:#f8f9fa;">
+                    <div style="padding:18px 24px;text-align:center;font-size:12px;color:#7a7a7a;background:#fff7f7;border-top:1px solid #f5d0d0;">
                         <p>© 2025 Shift Scheduler - Sistema de Gestión de Turnos</p>
                     </div>
                 </div>
@@ -360,7 +402,7 @@ Shift Scheduler
             """
             # Plain text
             shifts_text = "\n".join([
-                f"- {s['date']} de {s['start_time']} a {s['end_time']}"
+                f"- {s['date']} de {self._format_time_12h(s['start_time'])} a {self._format_time_12h(s['end_time'])}"
                 for s in shifts
             ])
             plain_content = f"""Turnos Cancelados - Shift Scheduler
@@ -369,6 +411,8 @@ Hola {user_name},
 
 Los siguientes turnos han sido cancelados:
 {shifts_text}
+
+Inicia sesión para revisar tu calendario: {login_url}
 
 ---
 Shift Scheduler
@@ -396,8 +440,8 @@ Shift Scheduler
                 f"""
                 <tr>
                     <td style="padding:12px 14px;border-bottom:1px solid #f3e7b0;">{s['date']}</td>
-                    <td style="padding:12px 14px;border-bottom:1px solid #f3e7b0;">{s['start_time']}</td>
-                    <td style="padding:12px 14px;border-bottom:1px solid #f3e7b0;">{s['end_time']}</td>
+                    <td style="padding:12px 14px;border-bottom:1px solid #f3e7b0;">{self._format_time_12h(s['start_time'])}</td>
+                    <td style="padding:12px 14px;border-bottom:1px solid #f3e7b0;">{self._format_time_12h(s['end_time'])}</td>
                 </tr>
                 """
                 for s in shifts
@@ -456,7 +500,7 @@ Shift Scheduler
             """
 
             shifts_text = "\n".join([
-                f"- {s['date']} de {s['start_time']} a {s['end_time']}"
+                f"- {s['date']} de {self._format_time_12h(s['start_time'])} a {self._format_time_12h(s['end_time'])}"
                 for s in shifts
             ])
             plain_content = f"""Turnos duplicados - Shift Scheduler
