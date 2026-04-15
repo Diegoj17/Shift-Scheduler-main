@@ -8,6 +8,7 @@ urlpatterns = [
     path('shifts/my/', views.MyShiftsAPIView.as_view(), name='my_shifts'),
     path('shifts/new/', views.ShiftCreateAPIView.as_view(), name='shift_api_create'),
     path('shifts/<int:pk>/edit/', views.ShiftUpdateAPIView.as_view(), name='shift_api_edit'),
+    path('shifts/delete/', views.ShiftDeleteAPIView.as_view(), name='shift_api_delete_many'),
     path('shifts/<int:pk>/delete/', views.ShiftDeleteAPIView.as_view(), name='shift_api_delete'),
     path('shifts/duplicate/', views.ShiftDuplicateAPIView.as_view(), name='shift_api_duplicate'),
     

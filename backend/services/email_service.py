@@ -322,6 +322,138 @@ Shift Scheduler
             logger.error(f"❌ Error enviando recordatorio a {to_email}: {str(e)}", exc_info=True)
             return False
 
+    def send_shifts_cancelled_email(self, to_email, user_name, shifts):
+        """
+        Envía un solo correo listando todos los turnos cancelados.
+        shifts: lista de dicts con 'date', 'start_time', 'end_time'
+        """
+        try:
+            # Construir lista en HTML
+            shifts_html = "".join([
+                f"<li><strong>{s['date']}</strong> de {s['start_time']} a {s['end_time']}</li>"
+                for s in shifts
+            ])
+            html_content = f"""
+            <html>
+            <body>
+                <div style="max-width:600px;margin:0 auto;background:#fff;border-radius:8px;overflow:hidden;">
+                    <div style="background:#dc3545;color:white;padding:30px 20px;text-align:center;">
+                        <h1 style="margin:0;font-size:24px;">Shift Scheduler</h1>
+                        <div style="font-size:18px;">Turnos Cancelados</div>
+                    </div>
+                    <div style="padding:30px 20px;">
+                        <h2>Hola {user_name},</h2>
+                        <p>Los siguientes turnos han sido cancelados:</p>
+                        <ul style="font-size:16px;">{shifts_html}</ul>
+                        <div style="text-align:center;margin:30px 0;">
+                            <a href="{self.frontend_url}/calendar" style="display:inline-block;padding:14px 28px;background:#dc3545;color:white;text-decoration:none;border-radius:5px;font-weight:bold;">
+                                Ver Mi Calendario
+                            </a>
+                        </div>
+                        <p>Puedes gestionar tus preferencias de notificación desde tu perfil.</p>
+                    </div>
+                    <div style="padding:20px;text-align:center;font-size:12px;color:#666;background:#f8f9fa;">
+                        <p>© 2025 Shift Scheduler - Sistema de Gestión de Turnos</p>
+                    </div>
+                </div>
+            </body>
+            </html>
+            """
+            # Plain text
+            shifts_text = "\n".join([
+                f"- {s['date']} de {s['start_time']} a {s['end_time']}"
+                for s in shifts
+            ])
+            plain_content = f"""Turnos Cancelados - Shift Scheduler
+
+Hola {user_name},
+
+Los siguientes turnos han sido cancelados:
+{shifts_text}
+
+Puedes gestionar tus preferencias de notificación desde tu perfil.
+
+---
+Shift Scheduler
+"""
+            message = Mail(
+                from_email=From(self.from_email, "Shift Scheduler"),
+                to_emails=To(to_email),
+                subject="Turnos cancelados - Shift Scheduler",
+                html_content=html_content,
+                plain_text_content=plain_content
+            )
+            return self._send_with_retry(message, email_type="shifts_cancelled")
+        except Exception as e:
+            logger.error(f"❌ Error enviando email de turnos cancelados a {to_email}: {str(e)}", exc_info=True)
+            return False
+
+    def send_shifts_created_email(self, to_email, user_name, shifts):
+        """
+        Envía un solo correo listando todos los turnos creados (por duplicación).
+        shifts: lista de dicts con 'date', 'start_time', 'end_time'
+        """
+        try:
+            # Construir lista en HTML
+            shifts_html = "".join([
+                f"<li><strong>{s['date']}</strong> de {s['start_time']} a {s['end_time']}</li>"
+                for s in shifts
+            ])
+            html_content = f"""
+            <html>
+            <body>
+                <div style="max-width:600px;margin:0 auto;background:#fff;border-radius:8px;overflow:hidden;">
+                    <div style="background:#28a745;color:white;padding:30px 20px;text-align:center;">
+                        <h1 style="margin:0;font-size:24px;">Shift Scheduler</h1>
+                        <div style="font-size:18px;">Turnos Creados</div>
+                    </div>
+                    <div style="padding:30px 20px;">
+                        <h2>Hola {user_name},</h2>
+                        <p>Se han creado los siguientes turnos:</p>
+                        <ul style="font-size:16px;">{shifts_html}</ul>
+                        <div style="text-align:center;margin:30px 0;">
+                            <a href="{self.frontend_url}/calendar" style="display:inline-block;padding:14px 28px;background:#28a745;color:white;text-decoration:none;border-radius:5px;font-weight:bold;">
+                                Ver Mi Calendario
+                            </a>
+                        </div>
+                        <p>Puedes gestionar tus preferencias de notificación desde tu perfil.</p>
+                    </div>
+                    <div style="padding:20px;text-align:center;font-size:12px;color:#666;background:#f8f9fa;">
+                        <p>© 2025 Shift Scheduler - Sistema de Gestión de Turnos</p>
+                    </div>
+                </div>
+            </body>
+            </html>
+            """
+            # Plain text
+            shifts_text = "\n".join([
+                f"- {s['date']} de {s['start_time']} a {s['end_time']}"
+                for s in shifts
+            ])
+            plain_content = f"""Turnos Creados - Shift Scheduler
+
+Hola {user_name},
+
+Se han creado los siguientes turnos:
+{shifts_text}
+
+Puedes gestionar tus preferencias de notificación desde tu perfil.
+
+---
+Shift Scheduler
+"""
+            message = Mail(
+                from_email=From(self.from_email, "Shift Scheduler"),
+                to_emails=To(to_email),
+                subject="Turnos creados - Shift Scheduler",
+                html_content=html_content,
+                plain_text_content=plain_content
+            )
+            return self._send_with_retry(message, email_type="shifts_created")
+        except Exception as e:
+            logger.error(f"❌ Error enviando email de turnos creados a {to_email}: {str(e)}", exc_info=True)
+            return False
+
     def _send_with_retry(self, message, max_retries: int = 3, email_type: str = "generic"):
         """
         ✅ MEJORADO: Envía email con reintentos y logging detallado
