@@ -164,6 +164,20 @@ class NotificationService:
         ✅ MEJORADO: Manejo de errores más robusto
         """
         try:
+            # Para cancelaciones, reutilizar el template dedicado de EmailService
+            # y mantener consistencia visual en todos los flujos.
+            if notification_type == 'shift_cancelled' and related_shift is not None:
+                shifts = [{
+                    'date': related_shift.date.strftime('%d/%m/%Y'),
+                    'start_time': related_shift.start_time,
+                    'end_time': related_shift.end_time,
+                }]
+                return self.email_service.send_shifts_cancelled_email(
+                    to_email=user.email,
+                    user_name=user.get_full_name() or user.first_name or user.email,
+                    shifts=shifts,
+                )
+
             # Preparar contenido del email
             plain_content = f"""
 {title}
