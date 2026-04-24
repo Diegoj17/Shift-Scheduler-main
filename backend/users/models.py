@@ -126,15 +126,32 @@ def _create_employee_for_user(sender, instance, created, **kwargs):
 
         # Si el usuario ahora ES empleado -> crear si hace falta
         if instance.role == User.Role.EMPLEADO:
-            # Evitar crear duplicados si ya exista
-            try:
-                Employee.objects.get(user=instance)
-                return
-            except Employee.DoesNotExist:
-                # Crear Employee con posición tomada de `puesto` o valor por defecto
-                position = getattr(instance, 'puesto', None) or 'Sin puesto'
-                Employee.objects.create(user=instance, position=position)
-                return
+            desired_position = getattr(instance, 'puesto', None) or 'Sin puesto'
+
+            # Si no existe, lo crea activo; si existe, lo reactiva/sincroniza.
+            emp, emp_created = Employee.objects.get_or_create(
+                user=instance,
+                defaults={
+                    'position': desired_position,
+                    'is_active': True,
+                },
+            )
+
+            if not emp_created:
+                update_fields = []
+
+                if not emp.is_active:
+                    emp.is_active = True
+                    update_fields.append('is_active')
+
+                if desired_position and emp.position != desired_position:
+                    emp.position = desired_position
+                    update_fields.append('position')
+
+                if update_fields:
+                    emp.save(update_fields=update_fields)
+
+            return
 
         # Si el usuario dejó de ser EMPLEADO (tenía rol previo EMPLEADO), marcar su Employee como inactivo
         prev_role = getattr(instance, '_previous_role', None)
