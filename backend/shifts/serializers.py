@@ -89,6 +89,15 @@ class ShiftCreateSerializer(serializers.Serializer):
         end_time = data.get('end_time')
         user_id = data.get('employee')
 
+        # Compatibilidad frontend: aceptar [user_id] cuando llega selección única.
+        if isinstance(user_id, (list, tuple)):
+            if len(user_id) == 1:
+                user_id = user_id[0]
+            else:
+                raise serializers.ValidationError({
+                    "employee": "Debe enviar un único empleado"
+                })
+
         # ✅ NUEVO: Verificar si estamos editando un turno bloqueado
         if self.instance:
             if self.instance.is_locked:
@@ -151,9 +160,30 @@ class ShiftCreateSerializer(serializers.Serializer):
                         logger.info(f"✅ Employee CREADO: ID={employee.id}")
 
         if not employee.is_active:
-            raise serializers.ValidationError({
-                "employee": "El empleado no está activo"
-            })
+            user_obj = getattr(employee, 'user', None)
+            user_role = getattr(user_obj, 'role', None)
+            user_status = getattr(user_obj, 'status', None)
+            active_status = getattr(getattr(User, 'Status', None), 'ACTIVE', 'ACTIVE')
+            empleado_role = getattr(getattr(User, 'Role', None), 'EMPLEADO', 'EMPLEADO')
+
+            # Recuperación automática de datos legacy: si el usuario sigue siendo
+            # EMPLEADO activo, reactivar su perfil Employee y sincronizar puesto.
+            if user_obj and user_role == empleado_role and user_status == active_status:
+                desired_position = getattr(user_obj, 'puesto', None) or employee.position or 'Sin puesto'
+                update_fields = []
+
+                employee.is_active = True
+                update_fields.append('is_active')
+
+                if desired_position and employee.position != desired_position:
+                    employee.position = desired_position
+                    update_fields.append('position')
+
+                employee.save(update_fields=update_fields)
+            else:
+                raise serializers.ValidationError({
+                    "employee": "El empleado no está activo"
+                })
 
         # ✅ CORRECCIÓN: Aplicar exclude ANTES de verificar existencia
         if is_overnight_shift:
