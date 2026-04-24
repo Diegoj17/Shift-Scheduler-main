@@ -124,6 +124,9 @@ def _create_employee_for_user(sender, instance, created, **kwargs):
         # Import local para evitar ciclos
         from shifts.models import Employee
 
+        # Un empleado solo debe quedar activo cuando su cuenta está activa.
+        should_employee_be_active = bool(instance.is_active) and instance.status == User.Status.ACTIVE
+
         # Si el usuario ahora ES empleado -> crear si hace falta
         if instance.role == User.Role.EMPLEADO:
             desired_position = getattr(instance, 'puesto', None) or 'Sin puesto'
@@ -133,15 +136,15 @@ def _create_employee_for_user(sender, instance, created, **kwargs):
                 user=instance,
                 defaults={
                     'position': desired_position,
-                    'is_active': True,
+                    'is_active': should_employee_be_active,
                 },
             )
 
             if not emp_created:
                 update_fields = []
 
-                if not emp.is_active:
-                    emp.is_active = True
+                if emp.is_active != should_employee_be_active:
+                    emp.is_active = should_employee_be_active
                     update_fields.append('is_active')
 
                 if desired_position and emp.position != desired_position:
@@ -153,14 +156,12 @@ def _create_employee_for_user(sender, instance, created, **kwargs):
 
             return
 
-        # Si el usuario dejó de ser EMPLEADO (tenía rol previo EMPLEADO), marcar su Employee como inactivo
-        prev_role = getattr(instance, '_previous_role', None)
+        # Si el usuario no es EMPLEADO, cualquier Employee existente debe quedar inactivo.
         try:
-            if prev_role == User.Role.EMPLEADO and instance.role != User.Role.EMPLEADO:
-                emp = Employee.objects.filter(user=instance).first()
-                if emp and emp.is_active:
-                    emp.is_active = False
-                    emp.save(update_fields=['is_active'])
+            emp = Employee.objects.filter(user=instance).first()
+            if emp and emp.is_active:
+                emp.is_active = False
+                emp.save(update_fields=['is_active'])
         except Exception:
             # No romper el flujo de guardado de User si algo falla
             pass
