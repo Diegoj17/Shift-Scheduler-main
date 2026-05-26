@@ -1628,7 +1628,13 @@ class TimeEntryListAPIView(APIView):
             # ✅ Aplicar filtros
             start_date = request.query_params.get('start_date')
             end_date = request.query_params.get('end_date')
-            employee_id = request.query_params.get('employee')
+            employee_id = (
+                request.query_params.get('employee')
+                or request.query_params.get('employee_id')
+                or request.query_params.get('user_id')
+                or request.query_params.get('employeeId')
+                or request.query_params.get('employeeUserId')
+            )
             entry_type = request.query_params.get('entry_type')
             
             if start_date:
