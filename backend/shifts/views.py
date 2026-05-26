@@ -24,6 +24,20 @@ from django.utils.decorators import method_decorator
 from django.views.decorators.csrf import csrf_exempt
 
 
+def _resolve_employee_identifier(employee_identifier):
+    """Resolve un Employee tanto por su PK como por el id del User asociado."""
+    if employee_identifier in (None, ''):
+        return None
+
+    try:
+        return Employee.objects.select_related('user').get(pk=employee_identifier)
+    except Employee.DoesNotExist:
+        try:
+            return Employee.objects.select_related('user').get(user__id=employee_identifier)
+        except Employee.DoesNotExist:
+            return None
+
+
 class ShiftListView(ListView):
     model = Shift
     template_name = 'shifts/shift_list.html'
@@ -1002,8 +1016,15 @@ class AvailabilityListAPIView(APIView):
                         pass
                 
                 if employee_id:
-                    availabilities = availabilities.filter(employee_id=employee_id)
-                    logger.info(f"👤 Filtrado por empleado: {employee_id}")
+                    resolved_employee = _resolve_employee_identifier(employee_id)
+                    if resolved_employee:
+                        availabilities = availabilities.filter(employee=resolved_employee)
+                        logger.info(
+                            f"👤 Filtrado por empleado: employee_id={resolved_employee.id}, user_id={getattr(resolved_employee.user, 'id', None)}"
+                        )
+                    else:
+                        logger.warning(f"⚠️ No se encontró Employee para employee={employee_id} ni user_id={employee_id}")
+                        availabilities = availabilities.none()
                 
                 if availability_type in ['available', 'unavailable']:
                     availabilities = availabilities.filter(type=availability_type)
@@ -1281,7 +1302,9 @@ class CheckEmployeeAvailabilityAPIView(APIView):
                 }, status=status.HTTP_400_BAD_REQUEST)
             
             try:
-                employee = Employee.objects.get(pk=employee_id)
+                employee = _resolve_employee_identifier(employee_id)
+                if not employee:
+                    raise Employee.DoesNotExist()
                 
                 # ✅ Si es EMPLEADO, solo puede verificar su propia disponibilidad
                 if user.role == 'EMPLEADO':
@@ -1446,15 +1469,141 @@ class TimeEntryListAPIView(APIView):
     Filtros opcionales:
     - start_date: Fecha inicio (YYYY-MM-DD)
     - end_date: Fecha fin (YYYY-MM-DD)
-    - employee: ID del empleado (solo para GERENTE/ADMIN)
+    - employee: ID del empleado o del usuario asociado (solo para GERENTE/ADMIN)
     - entry_type: check_in o check_out
+
+    En modo EMPLEADO, el resultado se agrupa automáticamente por sesión
+    (entrada + salida) para mostrar la duración real trabajada.
     """
     authentication_classes = [JWTAuthentication]
     permission_classes = [permissions.IsAuthenticated]
     
     def get(self, request, *args, **kwargs):
         from .models import TimeEntry
+        from datetime import timedelta
         logger = logging.getLogger(__name__)
+
+        def _format_duration(delta):
+            total_seconds = int(delta.total_seconds())
+            if total_seconds < 0:
+                total_seconds = 0
+
+            hours, remainder = divmod(total_seconds, 3600)
+            minutes = remainder // 60
+
+            if hours and minutes:
+                return f"{hours}h {minutes}m"
+            if hours:
+                return f"{hours}h"
+            return f"{minutes}m"
+
+        def _build_sessions(entries):
+            sessions = []
+            open_entry = None
+
+            for entry in entries:
+                if entry.entry_type == 'check_in':
+                    if open_entry is not None:
+                        sessions.append({
+                            'id': open_entry.id,
+                            'employee_id': open_entry.employee.id,
+                            'employee_name': f"{open_entry.employee.user.first_name} {open_entry.employee.user.last_name}".strip() if open_entry.employee and open_entry.employee.user else 'Desconocido',
+                            'date': open_entry.date.isoformat(),
+                            'check_in': open_entry.timestamp_local.isoformat(),
+                            'check_out': None,
+                            'entry_time': open_entry.timestamp_local.time().isoformat(),
+                            'exit_time': None,
+                            'hours': 0,
+                            'minutes': 0,
+                            'duration_minutes': 0,
+                            'duration_display': 'Pendiente',
+                            'status': 'pending',
+                            'state': 'pendiente',
+                            'check_in_id': open_entry.id,
+                            'check_out_id': None,
+                            'notes': open_entry.notes or '',
+                            'location': open_entry.location or '',
+                            'shift_id': open_entry.shift.id if open_entry.shift else None,
+                        })
+                    open_entry = entry
+                    continue
+
+                if entry.entry_type == 'check_out':
+                    if open_entry is None:
+                        sessions.append({
+                            'id': entry.id,
+                            'employee_id': entry.employee.id,
+                            'employee_name': f"{entry.employee.user.first_name} {entry.employee.user.last_name}".strip() if entry.employee and entry.employee.user else 'Desconocido',
+                            'date': entry.date.isoformat(),
+                            'check_in': None,
+                            'check_out': entry.timestamp_local.isoformat(),
+                            'entry_time': None,
+                            'exit_time': entry.timestamp_local.time().isoformat(),
+                            'hours': 0,
+                            'minutes': 0,
+                            'duration_minutes': 0,
+                            'duration_display': 'Salida sin entrada',
+                            'status': 'orphan_check_out',
+                            'state': 'salida_sin_entrada',
+                            'check_in_id': None,
+                            'check_out_id': entry.id,
+                            'notes': entry.notes or '',
+                            'location': entry.location or '',
+                            'shift_id': entry.shift.id if entry.shift else None,
+                        })
+                        continue
+
+                    duration = entry.timestamp_local - open_entry.timestamp_local
+                    total_minutes = max(int(duration.total_seconds() // 60), 0)
+                    hours, minutes = divmod(total_minutes, 60)
+
+                    sessions.append({
+                        'id': open_entry.id,
+                        'employee_id': open_entry.employee.id,
+                        'employee_name': f"{open_entry.employee.user.first_name} {open_entry.employee.user.last_name}".strip() if open_entry.employee and open_entry.employee.user else 'Desconocido',
+                        'date': open_entry.date.isoformat(),
+                        'check_in': open_entry.timestamp_local.isoformat(),
+                        'check_out': entry.timestamp_local.isoformat(),
+                        'entry_time': open_entry.timestamp_local.time().isoformat(),
+                        'exit_time': entry.timestamp_local.time().isoformat(),
+                        'hours': hours,
+                        'minutes': minutes,
+                        'duration_minutes': total_minutes,
+                        'duration_display': _format_duration(duration),
+                        'status': 'completed',
+                        'state': 'completado',
+                        'check_in_id': open_entry.id,
+                        'check_out_id': entry.id,
+                        'notes': open_entry.notes or entry.notes or '',
+                        'location': open_entry.location or entry.location or '',
+                        'shift_id': entry.shift.id if entry.shift else (open_entry.shift.id if open_entry.shift else None),
+                    })
+                    open_entry = None
+
+            if open_entry is not None:
+                sessions.append({
+                    'id': open_entry.id,
+                    'employee_id': open_entry.employee.id,
+                    'employee_name': f"{open_entry.employee.user.first_name} {open_entry.employee.user.last_name}".strip() if open_entry.employee and open_entry.employee.user else 'Desconocido',
+                    'date': open_entry.date.isoformat(),
+                    'check_in': open_entry.timestamp_local.isoformat(),
+                    'check_out': None,
+                    'entry_time': open_entry.timestamp_local.time().isoformat(),
+                    'exit_time': None,
+                    'hours': 0,
+                    'minutes': 0,
+                    'duration_minutes': 0,
+                    'duration_display': 'Entrada sin salida',
+                    'status': 'open',
+                    'state': 'entrada_sin_salida',
+                    'check_in_id': open_entry.id,
+                    'check_out_id': None,
+                    'notes': open_entry.notes or '',
+                    'location': open_entry.location or '',
+                    'shift_id': open_entry.shift.id if open_entry.shift else None,
+                })
+
+            return sessions
         
         try:
             user = request.user
@@ -1499,18 +1648,36 @@ class TimeEntryListAPIView(APIView):
                     pass
             
             if employee_id and user.role in ['ADMIN', 'GERENTE']:
-                time_entries = time_entries.filter(employee_id=employee_id)
+                resolved_employee = _resolve_employee_identifier(employee_id)
+                if resolved_employee:
+                    time_entries = time_entries.filter(employee=resolved_employee)
+                    logger.info(
+                        f"👤 Filtrado por empleado: employee_id={resolved_employee.id}, user_id={getattr(resolved_employee.user, 'id', None)}"
+                    )
+                else:
+                    logger.warning(f"⚠️ No se encontró Employee para employee={employee_id} ni user_id={employee_id}")
+                    time_entries = time_entries.none()
             
             if entry_type in ['check_in', 'check_out']:
                 time_entries = time_entries.filter(entry_type=entry_type)
             
-            time_entries = time_entries.select_related('employee__user', 'shift').order_by('-timestamp')
+            time_entries = time_entries.select_related('employee__user', 'shift').order_by('timestamp')
+
+            grouped_view = request.query_params.get('grouped', '').lower() in ['1', 'true', 'yes', 'si']
+            if user.role in ['ADMIN', 'GERENTE'] and employee_id and request.query_params.get('grouped') is None:
+                grouped_view = True
+            if user.role == 'EMPLEADO' and request.query_params.get('grouped') is None:
+                grouped_view = True
             
             # ✅ Serializar resultados
-            serializer = TimeEntryListSerializer(time_entries, many=True)
+            if grouped_view:
+                results = _build_sessions(time_entries)
+            else:
+                serializer = TimeEntryListSerializer(time_entries.order_by('-timestamp'), many=True)
+                results = serializer.data
             
-            logger.info(f"✅ Retornando {len(serializer.data)} registros")
-            return Response({'results': serializer.data}, status=status.HTTP_200_OK)
+            logger.info(f"✅ Retornando {len(results)} registros")
+            return Response({'results': results}, status=status.HTTP_200_OK)
             
         except Exception as exc:
             logger.exception("💥 Error al listar registros")
@@ -1780,6 +1947,7 @@ class EmployeeShiftsAPIView(APIView):
     GET /api/shifts/employees/<employee_id>/shifts/
     
     Retorna solo turnos futuros (>24h) que sean válidos para intercambio.
+    Acepta tanto `employee_id` como `user_id` en la ruta.
     """
     authentication_classes = [JWTAuthentication]
     permission_classes = [permissions.IsAuthenticated]
@@ -1796,7 +1964,9 @@ class EmployeeShiftsAPIView(APIView):
             
             # Verificar que el empleado exista
             try:
-                target_employee = Employee.objects.get(pk=employee_id)
+                target_employee = _resolve_employee_identifier(employee_id)
+                if not target_employee:
+                    raise Employee.DoesNotExist()
             except Employee.DoesNotExist:
                 return Response({
                     'results': [],
